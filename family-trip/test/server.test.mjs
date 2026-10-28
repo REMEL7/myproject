@@ -200,7 +200,6 @@ test('vehicle-only recoverable deletion protects ballot/course and survives rest
     const latest=(await call(root+'/places',r.ownerToken,{action:'restore'})).body;
     assert.equal(latest.places.length,2);assert.ok(latest.places.some(p=>p.id===b));
     await call(root+'/ballot',r.ownerToken,{action:'open'});
-    assert.equal((await call(root+'/places',r.ownerToken,{action:'delete',placeId:a})).status,409);
     await call(root+'/ballot',r.joinToken,{action:'cast',placeId:a,voter:'delete-test-voter-0001',name:'민수'});
     await call(root+'/ballot',r.ownerToken,{action:'close'});
     const archived=await call(root+'/places',r.ownerToken,{action:'delete',placeId:a});
@@ -214,8 +213,9 @@ test('vehicle-only recoverable deletion protects ballot/course and survives rest
     await call(root+'/ballot',r.ownerToken,{action:'clear'});
     const planned=(await call(root+'/plan',r.ownerToken,{origin:{latitude:37.5,longitude:127},maxStops:2,assumedMinutes:20})).body;
     await call(root+'/course',r.ownerToken,{action:'choose',planId:planned.plans[0].id});
-    assert.equal((await call(root+'/places',r.ownerToken,{action:'delete',placeId:b})).status,409);
-    assert.equal((await call(root,r.joinToken)).body.places.length,2);
+    const changedCourse=(await call(root+'/places',r.ownerToken,{action:'delete',placeId:b})).body;
+    assert.equal(changedCourse.places.length,1);assert.equal(changedCourse.course.needsReplan,true);
+    assert.equal((await call(root+'/places',r.ownerToken,{action:'restore',placeId:b})).body.places.length,2);
   }finally{await new Promise(resolve=>server.close(resolve));rmSync(dataDir,{recursive:true,force:true});}
 });
 

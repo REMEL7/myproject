@@ -2,5 +2,5 @@
   "name": "moagil-family-trip",
   "private": true,
   "type": "module",
-  "scripts": { "start": "node server.mjs", "test": "node --test test/server.test.mjs test/session.test.mjs test/brand-contrast.test.mjs" }
+  "scripts": { "start": "node server.mjs", "test": "node --test test/server.test.mjs test/session.test.mjs test/brand-contrast.test.mjs test/place-management.test.mjs test/place-info.test.mjs" }
 }

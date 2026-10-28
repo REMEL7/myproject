@@ -47,11 +47,6 @@ try{
  if(-not($doc.SelectNodes('//node') | Where-Object {$_.text -eq '모아길'})){throw 'QA room missing'}
  if($doc.SelectNodes('//node') | Where-Object {$_.text -eq '투표가 끝났어요'}){throw 'Closed ballot replaced home'}
  Capture 'ux-home-choose.png' 
- Tap-Text '투표'
- Tap-Text '비밀 투표 열기'
- Tap-Text '돌아가기'
- $r=Invoke-RestMethod -Uri $base -Headers $headers
- if($r.ballot){throw 'Cancelling the vote created a ballot'}
  Tap-Text '홈'
  $doc=Screen-Xml
  if(-not($doc.SelectNodes('//node') | Where-Object {$_.text -eq '장소 둘러보기'})){throw 'Home entry missing'}
@@ -80,7 +75,7 @@ try{
  $doc=Screen-Xml
  $r=Invoke-RestMethod -Uri $base -Headers $headers
  if(($r.places | Where-Object {$_.id -eq $fixture.placeIds[0]}).stayMinutes -ne 120){throw 'Preset did not save 120 minutes'}
- Write-Output 'PASS destination tabs / vote cancel / simple course form / place menu / duration preset'
+ Write-Output 'PASS simple home / course form / place menu / duration preset'
  Tap-Text '홈'
  Capture 'ux-home-final.png'
 }finally{

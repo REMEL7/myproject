@@ -11,8 +11,6 @@ object TripFlow {
     fun next(room:JSONObject,connected:Boolean):Step {
         val title="어디로 갈까요?"
         if(!connected)return Step(title,"연결을 확인하고 다시 시작해 주세요.","연결 설정","settings")
-        val ballot=room.optJSONObject("ballot")
-        if(ballot?.optString("status")=="open")return Step(title,"진행 중인 투표를 확인해 보세요.","투표 보기","ballot")
         val course=room.optJSONObject("course")
         if(course!=null&&course.optInt("nextIndex")<(course.optJSONArray("stops")?.length() ?: 0))
             return Step(title,"저장한 코스에서 이어서 출발해요.","코스 이어가기","course")

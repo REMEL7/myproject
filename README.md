@@ -1,11 +1,11 @@
 # 모아길 · Moagil
 
-함께 갈 장소를 모으고 투표로 정한 뒤, 차량 내비게이션으로 안내받는 Pleos Connect 앱 개발 프로젝트입니다.
+휴대폰 지도에서 갈 장소를 모으고 차량에서 함께 정한 뒤, 내비게이션으로 안내받는 Pleos Connect 앱 개발 프로젝트입니다.
 
 ## 구성
 
-- `PleosStarter/`: Kotlin 기반 차량 앱. iOS 느낌의 목록·하단 탭·시트, 장소 관리, 비밀 투표, 코스 저장과 이어가기, Pleos 기본 내비 연동.
-- `family-trip/`: Node.js 공유 서버와 휴대폰 웹. QR 참여, 카카오 장소 검색·지도, 관심 표시, 비밀 투표, 코스 계산.
+- `PleosStarter/`: Kotlin 기반 차량 앱. iOS 느낌의 목록·하단 탭·시트, 장소 수정·삭제, 코스 저장과 이어가기, Pleos 기본 내비 연동.
+- `family-trip/`: Node.js 공유 서버와 휴대폰 웹. QR 연결, 카카오 지도 검색·장소 추가, 코스 계산.
 
 ## 개발 환경
 
@@ -19,7 +19,7 @@
 2. `family-trip` 폴더에서 `node server.mjs`를 실행합니다.
 3. PC 웹은 `http://localhost:8787`, 에뮬레이터는 `http://10.0.2.2:8787`로 연결합니다.
 
-기본 서버는 PC 내부에서만 접속할 수 있습니다. 휴대폰 QR 접속은 해당 네트워크의 수신 주소와 PUBLIC_URL을 별도로 설정해야 합니다. 임시 외부 수신은 30분 뒤 자동 종료됩니다. 설정 방법은 [서버 안내](family-trip/README.md)를 참고하세요.
+기본 서버는 PC 내부에서만 접속할 수 있습니다. 휴대폰 QR 접속은 해당 네트워크의 수신 주소와 PUBLIC_URL을 별도로 설정해야 합니다. 임시 외부 수신은 기본 30분이며, PHONE_SHARE_UNTIL로 지정한 종료 시각에 따라 최대 60분까지 허용합니다. 설정 방법은 [서버 안내](family-trip/README.md)를 참고하세요.
 
 ### Android 앱
 
@@ -32,7 +32,7 @@
 ## 현재 동작과 제한
 
 - 차량 조작은 주차 상태에서만 허용하며, 차량 상태 확인이 안 되면 조작을 제한합니다.
-- 하트는 가고 싶은 장소에 대한 관심 표시이고, 비밀 투표는 최종 결정을 위한 별도 한 표입니다.
+- 휴대폰 웹은 지도 검색과 장소 추가만 제공합니다. 차량은 장소 선택·함께 추가·코스·설정 탭에서 함께 정하고 수정·삭제·출발하는 흐름입니다. 이전 투표 API와 기록은 호환 목적으로 보존합니다.
 - 카카오 도로 구간 조회에 성공하면 방문 순서를 도로 예상시간으로 비교합니다. 실패 시 직선 동선·임시 이동시간 사용 여부를 표시합니다.
 - 필수 장소와 관심 표시 수를 기준으로 최대 5곳을 고른 뒤 그 장소들의 방문 순서를 비교합니다.
 - 운영시간은 현재 직접 입력하는 방식입니다. 자동 영업정보 조회는 아직 연동하지 않았습니다.
@@ -45,7 +45,7 @@
 `family-trip` 폴더에서 다음 명령을 실행합니다.
 
 ```sh
-node --test test/server.test.mjs test/session.test.mjs test/brand-contrast.test.mjs
+node --test test/server.test.mjs test/session.test.mjs test/brand-contrast.test.mjs test/place-management.test.mjs test/place-info.test.mjs
 ```
 
 Android 화면 검증 스크립트는 `family-trip/test/`에 있습니다. 로컬 에뮬레이터·SDK 경로와 별도 검증 모임 데이터가 필요한 개발용 스크립트입니다.

@@ -135,6 +135,10 @@ class CupertinoTabIcon(context:Context,private val kind:String):View(context){
             "home"->{c.drawPath(Path().apply{moveTo(5f,15f);lineTo(16f,5f);lineTo(27f,15f);moveTo(8f,13f);lineTo(8f,27f);lineTo(13f,27f);lineTo(13f,20f);lineTo(19f,20f);lineTo(19f,27f);lineTo(24f,27f);lineTo(24f,13f)},paint)}
             "places"->{c.drawPath(Path().apply{moveTo(16f,28f);cubicTo(12f,23f,6f,17f,6f,12f);cubicTo(6f,0f,26f,0f,26f,12f);cubicTo(26f,17f,20f,23f,16f,28f)},paint);c.drawCircle(16f,12f,3.4f,paint)}
             "course"->{c.drawCircle(7f,7f,3f,paint);c.drawCircle(25f,25f,3f,paint);c.drawPath(Path().apply{moveTo(10f,7f);lineTo(21f,7f);cubicTo(29f,7f,29f,16f,21f,16f);lineTo(11f,16f);cubicTo(3f,16f,3f,25f,11f,25f);lineTo(22f,25f)},paint)}
+            "settings"->{
+                c.drawCircle(16f,16f,8.5f,paint);c.drawCircle(16f,16f,3.5f,paint)
+                repeat(8){c.save();c.rotate(it*45f,16f,16f);c.drawLine(16f,3f,16f,7f,paint);c.restore()}
+            }
             else->{c.drawRoundRect(5f,5f,27f,27f,6f,6f,paint);c.drawPath(Path().apply{moveTo(10f,16f);lineTo(14f,20f);lineTo(22f,12f)},paint)}
         };c.restore()
     }

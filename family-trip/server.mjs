@@ -22,10 +22,18 @@ export function createRelay({dataDir = path.join(here, 'data'), publicUrl = proc
   let migrated=false;for(const r of Object.values(rooms)){if(!r.expiresAt){r.expiresAt=now()+roomLifetimeMs;migrated=true;}}if(migrated)save();
   const roadLookup=roadProvider || (mobilityKey?kakaoRoadProvider(mobilityKey):null);
   const planning=new Set();
-  const ballotView=(b,r)=>!b?null:{id:b.id,status:b.status,candidateIds:b.candidateIds,castCount:Object.keys(b.votes).length,closedAt:b.closedAt||null,...(b.status==='closed'?{counts:b.counts,winnerIds:b.winnerIds,candidateNames:Object.fromEntries(b.candidateIds.map(id=>[id,[...r.places,...(r.deletedPlaces||[])].find(p=>p.id===id)?.name||'삭제된 장소']))}:{})};
+  const placeInfoCache=new Map();
+  const rememberPlace=doc=>{
+    if(!/^\d+$/.test(String(doc.id)))return null;
+    const info={provider:'kakao',sourceId:String(doc.id),sourceName:text(doc.place_name),categoryName:text(doc.category_name,200),phone:/^[0-9+()\-\s]{3,40}$/.test(doc.phone||'')?doc.phone:'',placeUrl:`https://place.map.kakao.com/${doc.id}`,checkedAt:new Date(now()).toISOString(),hoursAvailable:false};
+    if(placeInfoCache.size>=500)placeInfoCache.delete(placeInfoCache.keys().next().value);
+    placeInfoCache.set(info.sourceId,{info,latitude:Number(doc.y),longitude:Number(doc.x),at:now()});return info;
+  };
+  const cachedInfo=(id,latitude,longitude)=>{const entry=placeInfoCache.get(String(id));return entry&&now()-entry.at<30*60*1000&&Math.abs(entry.latitude-latitude)<.0001&&Math.abs(entry.longitude-longitude)<.0001?entry.info:null;};
+  const ballotView=(b,r)=>!b?null:{id:b.id,status:b.status,candidateIds:b.candidateIds,castCount:Object.keys(b.votes).length,closedAt:b.closedAt||null,cancelled:!!b.cancelled,...(b.status==='closed'?{counts:b.counts,winnerIds:b.winnerIds,candidateNames:Object.fromEntries(b.candidateIds.map(id=>[id,[...r.places,...(r.deletedPlaces||[])].find(p=>p.id===id)?.name||'삭제된 장소']))}:{})};
   const snapshot=r=>{
     const secret=!!r.ballot;
-    return {id:r.id,expiresAt:r.expiresAt,closedAt:r.closedAt||null,name:r.name,groupType:r.groupType||'together',decisionMode:r.decisionMode||'',selectedId:r.selectedId,revision:r.revision,canUndoPlaceDelete:!!r.deletedPlaces?.length,ballot:ballotView(r.ballot,r),plans:r.plans||[],course:r.course||null,places:r.places.map(p=>({id:p.id,name:p.name,address:p.address,sender:p.sender,note:p.note,category:p.category||'other',latitude:p.latitude,longitude:p.longitude,createdAt:p.createdAt,demo:!!p.demo,opensAt:p.opensAt||'',closesAt:p.closesAt||'',stayMinutes:p.stayMinutes||60,mustVisit:!!p.mustVisit,hoursSource:p.opensAt?'직접 확인':'확인 필요',votes:secret?null:p.voters.length,supporters:secret?[]:p.voters.map(id=>r.members?.[id]).filter(Boolean),unnamedVotes:secret?null:p.voters.filter(id=>!r.members?.[id]).length}))};
+    return {id:r.id,expiresAt:r.expiresAt,closedAt:r.closedAt||null,name:r.name,groupType:r.groupType||'together',decisionMode:r.decisionMode||'',selectedId:r.selectedId,revision:r.revision,canUndoPlaceDelete:!!r.deletedPlaces?.length,ballot:ballotView(r.ballot,r),plans:r.plans||[],course:r.course||null,places:r.places.map(p=>({id:p.id,name:p.name,address:p.address,sender:p.sender,note:p.note,category:p.category||'other',info:p.info||null,latitude:p.latitude,longitude:p.longitude,createdAt:p.createdAt,demo:!!p.demo,opensAt:p.opensAt||'',closesAt:p.closesAt||'',stayMinutes:p.stayMinutes||60,mustVisit:!!p.mustVisit,hoursSource:p.opensAt?'직접 확인':'확인 필요',votes:secret?null:p.voters.length,supporters:secret?[]:p.voters.map(id=>r.members?.[id]).filter(Boolean),unnamedVotes:secret?null:p.voters.filter(id=>!r.members?.[id]).length}))};
   };
   const owner=(r,auth)=>{if(auth!==r.ownerToken)fail(403,'이 작업은 차량의 모임 진행자만 할 수 있습니다.');};
   const changed=r=>{r.revision++;save();return snapshot(r);};
@@ -50,9 +58,9 @@ export function createRelay({dataDir = path.join(here, 'data'), publicUrl = proc
       if(count>(req.method==='GET'?600:120))fail(429,'요청이 많습니다. 잠시 후 다시 시도해 주세요.');
       if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}` && req.headers.origin !== `https://${req.headers.host}`) fail(403, '외부 사이트 요청은 허용하지 않습니다.');
       const url = new URL(req.url, 'http://localhost');
-      if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/app.js' || url.pathname === '/style.css' || url.pathname === '/privacy')) {
+      if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/app.js' || url.pathname === '/style.css' || url.pathname === '/moagil-mark.svg' || url.pathname === '/privacy')) {
         const file = url.pathname === '/' ? 'index.html' : url.pathname === '/privacy' ? 'privacy.html' : url.pathname.slice(1);
-        const type = file.endsWith('.js') ? 'text/javascript; charset=utf-8' : file.endsWith('.css') ? 'text/css; charset=utf-8' : 'text/html; charset=utf-8';
+        const type = file.endsWith('.svg') ? 'image/svg+xml; charset=utf-8' : file.endsWith('.js') ? 'text/javascript; charset=utf-8' : file.endsWith('.css') ? 'text/css; charset=utf-8' : 'text/html; charset=utf-8';
         return reply(res, 200, readFileSync(path.join(here, 'public', file), 'utf8'), type);
       }
       if (req.method === 'GET' && url.pathname === '/api/config') return reply(res, 200, {publicUrl:publicUrl || 'http://localhost:8787', searchEnabled:!!kakaoKey, mapEnabled:!!mapKey, roadRoutingEnabled:!!roadLookup, recommendationEngine:'constraint-search', mapJavascriptKey:mapKey, localOnly:!publicUrl});
@@ -79,7 +87,7 @@ export function createRelay({dataDir = path.join(here, 'data'), publicUrl = proc
         const upstream = await fetchPlaces('https://dapi.kakao.com/v2/local/search/keyword.json?' + new URLSearchParams({query:q,size:'10'}), {headers:{Authorization:`KakaoAK ${kakaoKey}`},signal:AbortSignal.timeout(8000)});
         if (!upstream.ok) fail(502, `지도 검색 연결 오류 (${upstream.status})`);
         const result = await upstream.json();
-        return reply(res, 200, {places:result.documents.map(p => ({sourceId:p.id, name:p.place_name, address:p.road_address_name || p.address_name, latitude:Number(p.y), longitude:Number(p.x), category:p.category_name, categoryCode:p.category_group_code, phone:p.phone}))});
+        return reply(res, 200, {places:result.documents.map(p => ({sourceId:p.id, name:p.place_name, address:p.road_address_name || p.address_name, latitude:Number(p.y), longitude:Number(p.x), category:p.category_name, categoryCode:p.category_group_code, phone:p.phone,info:rememberPlace(p)}))});
       }
       if (req.method !== 'POST') fail(405, '지원하지 않는 요청입니다.');
       const input = await body(req);
@@ -127,7 +135,7 @@ export function createRelay({dataDir = path.join(here, 'data'), publicUrl = proc
         return reply(res,200,changed(r));
       }
       if(match[2]==='plan'){
-        owner(r,auth);if(r.ballot?.status==='open')fail(409,'비밀 투표를 먼저 종료하세요.');
+        owner(r,auth);
         if(planning.has(r.id))fail(409,'코스 계산 중입니다. 잠시 기다려주세요.');
         planning.add(r.id);const version=r.revision;
         try{
@@ -144,7 +152,6 @@ export function createRelay({dataDir = path.join(here, 'data'), publicUrl = proc
       if(match[2]==='course'){
         owner(r,auth);
         if(input.action==='choose'){
-          if(r.ballot?.status==='open')fail(409,'비밀 투표를 먼저 종료하세요.');
           const p=r.plans.find(p=>p.id===input.planId);if(!p)fail(404,'추천 코스를 다시 불러와 주세요.');
           if(p.violations>0)fail(400,'운영시간과 충돌하는 코스입니다. 방문 조건이나 출발 시간을 바꿔 다시 계산하세요.');
           const prefix=p.prefixStops||[];
@@ -152,22 +159,64 @@ export function createRelay({dataDir = path.join(here, 'data'), publicUrl = proc
         }else if(['visit','skip'].includes(input.action)){
           const c=r.course;if(!c||c.status!=='active')fail(409,'진행 중인 코스가 없습니다.');
           const next=c.stops[c.nextIndex];if(next?.placeId!==input.placeId)fail(409,'현재 방문 순서를 다시 확인하세요.');
-          next.status=input.action==='visit'?'visited':'skipped';next.completedAt=Date.now();c.nextIndex++;if(c.nextIndex>=c.stops.length)c.status='complete';
+          next.status=input.action==='visit'?'visited':'skipped';next.completedAt=Date.now();c.nextIndex++;if(c.nextIndex>=c.stops.length){c.status='complete';c.needsReplan=false;}
           r.plans=[];
         }else if(input.action==='undo'){
           const c=r.course;if(!c||!c.nextIndex)fail(409,'되돌릴 방문 기록이 없습니다.');
+          if(!r.places.some(p=>p.id===c.stops[c.nextIndex-1].placeId))fail(409,'삭제된 장소의 방문 기록입니다. 장소를 먼저 복원해 주세요.');
           c.nextIndex--;c.stops[c.nextIndex].status='planned';delete c.stops[c.nextIndex].completedAt;c.status='active';
           r.plans=[];
         }else fail(400,'코스 동작을 확인하세요.');
         return reply(res,200,changed(r));
       }
       if (match[2] === 'places') {
+        if(input.action==='details'){
+          owner(r,auth);const p=r.places.find(p=>p.id===input.placeId);if(!p)fail(404,'장소가 없습니다.');
+          if(p.info&&now()-Date.parse(p.info.checkedAt)<86400000)return reply(res,200,snapshot(r));
+          if(!kakaoKey)fail(503,'장소 정보 연결을 준비 중이에요.');
+          if(Date.now()-(searchTimes.get(r.id)||0)<1000)fail(429,'잠시 후 다시 확인해 주세요.');searchTimes.set(r.id,Date.now());
+          const query=new URLSearchParams({query:p.info?.sourceName||p.name,x:String(p.longitude),y:String(p.latitude),radius:'150',size:'15'});
+          const response=await fetchPlaces('https://dapi.kakao.com/v2/local/search/keyword.json?'+query,{headers:{Authorization:`KakaoAK ${kakaoKey}`},signal:AbortSignal.timeout(8000)});
+          if(!response.ok)fail(502,'가게 정보를 불러오지 못했어요.');
+          const data=await response.json();
+          const matches=(data.documents||[]).filter(d=>Number.isFinite(Number(d.x))&&Number.isFinite(Number(d.y))&&Math.abs(Number(d.y)-p.latitude)<.001&&Math.abs(Number(d.x)-p.longitude)<.001&&(p.info?.sourceId?String(d.id)===p.info.sourceId:d.place_name===p.name));
+          if(matches.length!==1)fail(409,'같은 장소인지 확인하지 못했어요. 휴대폰 지도에서 장소를 다시 선택해 주세요.');
+          const info=rememberPlace(matches[0]);if(!info)fail(502,'장소 식별 정보를 확인하지 못했어요.');
+          if(!r.places.includes(p))fail(409,'이미 삭제된 장소예요.');p.info=info;return reply(res,200,changed(r));
+        }
+        if(input.action==='update'){
+          owner(r,auth);
+          const p=r.places.find(p=>p.id===input.placeId);if(!p)fail(404,'삭제됐거나 없는 장소입니다.');
+          if(['latitude','longitude','address'].some(k=>input[k]!==undefined&&input[k]!==p[k]))fail(400,'위치를 바꾸려면 지도에서 장소를 다시 추가해 주세요.');
+          const name=input.name===undefined?p.name:text(input.name),note=input.note===undefined?p.note:text(input.note,160);
+          const category=input.category===undefined?p.category:input.category;
+          if(!name)fail(400,'장소 이름을 입력하세요.');
+          if(!['food','cafe','trip','stay','other'].includes(category||'other'))fail(400,'장소 분류를 확인하세요.');
+          if(r.places.some(q=>q.id!==p.id&&q.name===name&&Math.abs(q.latitude-p.latitude)<0.0001&&Math.abs(q.longitude-p.longitude)<0.0001))fail(409,'같은 위치에 같은 이름의 장소가 이미 있어요.');
+          p.name=name;p.note=note;p.category=category||'other';
+          if(r.course?.status==='active')for(const stop of r.course.stops.slice(r.course.nextIndex))if(stop.placeId===p.id)stop.name=name;
+          r.plans=[];return reply(res,200,changed(r));
+        }
         if(input.action==='delete'){
           owner(r,auth);
           const index=r.places.findIndex(p=>p.id===input.placeId);if(index<0)fail(404,'이미 삭제됐거나 없는 장소입니다.');
-          if(r.ballot?.status==='open'&&r.ballot.candidateIds.includes(input.placeId))fail(409,'진행 중인 비밀 투표 후보입니다. 투표를 마친 뒤 삭제할 수 있어요.');
-          if(r.course?.stops.some(s=>s.placeId===input.placeId))fail(409,'저장한 코스에 포함된 장소입니다. 다른 코스를 저장한 뒤 삭제하세요.');
+          const removed=r.places[index];
+          const c=r.course;
+          if(c?.status==='active'&&c.stops.slice(c.nextIndex).some(s=>s.placeId===input.placeId)){
+            removed._courseBeforeDelete=structuredClone(c);
+            c.stops=c.stops.filter((s,i)=>i<c.nextIndex||s.placeId!==input.placeId);
+            c.needsReplan=c.nextIndex<c.stops.length;
+            if(!c.needsReplan)c.status=c.nextIndex?'complete':'cancelled';
+            c.changedAt=now();
+            removed._courseAfterDelete=JSON.stringify(c);
+          }
           r.deletedPlaces ||= [];r.deletedPlaces.push(r.places.splice(index,1)[0]);
+          if(r.ballot?.status==='open'&&r.ballot.candidateIds.includes(input.placeId)){
+            const b=r.ballot;const counts=Object.fromEntries(b.candidateIds.map(id=>[id,0]));
+            for(const id of Object.values(b.votes))if(Object.hasOwn(counts,id))counts[id]++;
+            const highest=Math.max(...Object.values(counts));
+            b.status='closed';b.cancelled=true;b.counts=counts;b.winnerIds=highest?b.candidateIds.filter(id=>counts[id]===highest):[];b.closedAt=now();
+          }
           if(r.selectedId===input.placeId)r.selectedId=null;
           r.plans=[];return reply(res,200,changed(r));
         }
@@ -175,16 +224,20 @@ export function createRelay({dataDir = path.join(here, 'data'), publicUrl = proc
           owner(r,auth);const index=input.placeId===undefined?(r.deletedPlaces?.length||0)-1:(r.deletedPlaces||[]).findIndex(p=>p.id===input.placeId);const p=r.deletedPlaces?.[index];if(!p)fail(409,'이미 복원됐거나 복원할 장소가 없습니다.');
           if(r.places.length>=50)fail(409,'장소가 50곳입니다. 다른 장소를 정리한 뒤 복원하세요.');
           if(r.places.some(s=>s.id===p.id||(s.name===p.name&&Math.abs(s.latitude-p.latitude)<0.0001&&Math.abs(s.longitude-p.longitude)<0.0001)))fail(409,'동일한 장소가 이미 있습니다.');
-          r.places.push(r.deletedPlaces.splice(index,1)[0]);r.plans=[];return reply(res,200,changed(r));
+          const {_courseBeforeDelete,_courseAfterDelete,...restored}=r.deletedPlaces.splice(index,1)[0];
+          r.places.push(restored);
+          if(_courseBeforeDelete&&JSON.stringify(r.course)===_courseAfterDelete)r.course=_courseBeforeDelete;
+          r.plans=[];return reply(res,200,changed(r));
         }
         const latitude = input.latitude, longitude = input.longitude;
         if (typeof latitude !== 'number' || typeof longitude !== 'number' || !Number.isFinite(latitude) || !Number.isFinite(longitude) || Math.abs(latitude)>90 || Math.abs(longitude)>180) fail(400, '유효한 위도와 경도를 입력하세요.');
         if (!text(input.name) || !text(input.sender,30)) fail(400, '장소명과 보낸 사람을 입력하세요.');
         const existing = r.places.find(p => p.name === text(input.name) && Math.abs(p.latitude-latitude)<0.0001 && Math.abs(p.longitude-longitude)<0.0001);
-        if (existing) return reply(res, 200, {id:existing.id, duplicate:true});
+        if (existing) {const info=cachedInfo(input.sourceId,latitude,longitude);if(info&&!existing.info){existing.info=info;changed(r);}return reply(res, 200, {id:existing.id, duplicate:true});}
         if (r.places.length >= 50) fail(400, '여행방당 장소는 50개까지 추가할 수 있습니다.');
         const category = ['food','cafe','trip','stay','other'].includes(input.category) ? input.category : 'other';
         const p = {id:randomUUID(),name:text(input.name),address:text(input.address,200),sender:text(input.sender,30),note:text(input.note,160),category,latitude,longitude,voters:[],createdAt:Date.now(),demo:input.demo === true};
+        p.info=cachedInfo(input.sourceId,latitude,longitude);
         try{Object.assign(p,timing(input));}catch(e){fail(400,e.message);}
         r.plans=[];r.places.push(p); r.revision++; save(); return reply(res, 201, {id:p.id});
       }
@@ -217,11 +270,10 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     const approvedUntil=Number(process.env.PHONE_SHARE_UNTIL || Date.now()+30*60*1000);
     if(!Number.isFinite(approvedUntil)||approvedUntil<=Date.now()){relay.setPublicUrl('');console.log('Phone sharing approval expired; local relay only.');}
     else {
-    const shareMs=Math.min(30*60*1000,approvedUntil-Date.now());
+    const shareMs=Math.min(60*60*1000,approvedUntil-Date.now());
     const lan = http.createServer(relay.listeners('request')[0]);
     lan.listen(port, host, () => console.log(`Temporary phone listener: ${host}:${port} (${Math.ceil(shareMs/60000)} minutes remaining)`));
     setTimeout(() => {lan.close();lan.closeAllConnections();relay.setPublicUrl('');console.log('Phone listener closed; local relay remains available.');},shareMs).unref();
     }
   }
 }
-

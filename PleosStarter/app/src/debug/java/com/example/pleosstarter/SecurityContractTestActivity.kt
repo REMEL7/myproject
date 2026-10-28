@@ -35,7 +35,7 @@ class SecurityContractTestActivity:Activity(){
             check(TripFlow.next(gathered,true).action=="places")
             check(TripFlow.next(gathered,false).action=="settings")
             gathered.put("ballot",JSONObject().put("status","open"))
-            check(TripFlow.next(gathered,true).action=="ballot")
+            check(TripFlow.next(gathered,true).action=="places")
             gathered.getJSONObject("ballot").put("status","closed")
             check(TripFlow.next(gathered,true).action=="places")
             check(TripFlow.next(gathered,true).title=="어디로 갈까요?")
