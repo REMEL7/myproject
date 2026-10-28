@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <queries><package android:name="ai.umos.ambientai" /></queries>
+    <uses-feature android:name="android.hardware.type.automotive" android:required="true" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+    <uses-permission android:name="pleos.car.permission.CAR_DOORS" />
+    <uses-permission android:name="pleos.car.permission.NAVI_CUSTOM_MAP" />
+    <uses-permission android:name="pleos.car.permission.NAVI_ROUTE" />
+    <uses-permission android:name="pleos.car.permission.NAVI_ROUTE_SEARCH" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <application
+        android:allowBackup="false"
+        android:label="모아길"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@android:style/Theme.Material.NoActionBar">
+        <uses-library android:name="android.car" android:required="false" />
+        <uses-library android:name="ai.pleos.playground.car" android:required="false" />
+        <meta-data android:name="com.hmg.rotary.ROTARY_SUPPORTED" android:value="false" />
+        <activity android:name=".MainActivity" android:exported="false" />
+        <activity android:name=".GleoActionActivity" android:exported="true" android:excludeFromRecents="true"
+            android:permission="ai.umos.gleo.permission.APP_ACTION">
+            <intent-filter>
+                <action android:name="SHOW_MOAGIL_COURSE" />
+                <action android:name="GET_MOAGIL_VOTE_RESULT" />
+                <action android:name="RESUME_MOAGIL_COURSE" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+        <activity android:name=".FamilyTripActivity" android:exported="true" android:resizeableActivity="true"
+            android:configChanges="screenSize|smallestScreenSize|orientation|screenLayout">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
+

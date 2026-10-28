@@ -1,0 +1,15 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <queries><intent><action android:name="android.settings.action.MANAGE_OVERLAY_PERMISSION" /></intent></queries>
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- Local PC relay is available only in the debug prototype. Production requires HTTPS. -->
+    <application android:usesCleartextTraffic="true">
+        <activity android:name=".GleoContractTestActivity" android:exported="true" android:excludeFromRecents="true" />
+        <activity android:name=".SecurityContractTestActivity" android:exported="true" android:excludeFromRecents="true" />
+        <activity android:name=".OverlayLabActivity" android:exported="false" />
+        <service android:name=".NavigationWidgetService" android:exported="false" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Parked overlay feasibility experiment, separate from family trip app." />
+        </service>
+    </application>
+</manifest>

@@ -1,0 +1,11 @@
+{
+  "packageName": "com.example.pleosstarter",
+  "appDescription": "Moagil collects place suggestions and group votes and saves multi-stop travel courses for friends, families and colleagues.",
+  "invokeWord": "모아길",
+  "version": "0.1.0",
+  "actionCalls": [
+    {"type":"function","function":{"component":"activity","name":"SHOW_MOAGIL_COURSE","description":"Retrieve the saved Moagil course and remaining stops and display the course screen.","parameters":{"type":"object","properties":{},"required":[]}}},
+    {"type":"function","function":{"component":"activity","name":"GET_MOAGIL_VOTE_RESULT","description":"Retrieve the Moagil group voting result while keeping an ongoing secret ballot private.","parameters":{"type":"object","properties":{},"required":[]}}},
+    {"type":"function","function":{"component":"activity","name":"RESUME_MOAGIL_COURSE","description":"Open the next saved Moagil stop for user review before sending the remaining course to the vehicle navigation.","parameters":{"type":"object","properties":{},"required":[]}}}
+  ]
+}

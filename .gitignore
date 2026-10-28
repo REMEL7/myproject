@@ -1,0 +1,33 @@
+# Local development tools and Android build outputs
+.tools/
+.idea/
+**/.idea/
+**/.gradle/
+**/.kotlin/
+**/build/
+**/node_modules/
+**/local.properties
+*.iml
+*.apk
+*.aab
+*.aar
+
+# Secrets, signing keys, and live session records
+.env
+.env.*
+!.env.example
+**/data/
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+
+# Machine migration, downloaded SDKs, and local QA artifacts
+migration/
+research/
+Vehicle-*.pom
+*.log
+.DS_Store
+Thumbs.db
