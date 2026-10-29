@@ -39,7 +39,7 @@ object GleoResponses {
             if(high>0)ranked.filter{it.optInt("votes")==high}.take(5).forEach{data.put(JSONObject().put("placeName",it.optString("name").take(120)).put("votes",high))}
             return response(action,"success",if(high>0)"These places currently lead the public vote; voting is not finalized." else "There are no public votes for real places yet.",data)
         }
-        val course=room.optJSONObject("course") ?: return response(action,"asking","There is no saved course. Create and save a course in Moagil first.")
+        val course=room.optJSONObject("course") ?: return response(action,"asking","There is no saved course. Create and save a course in GMG first.")
         val stops=course.optJSONArray("stops") ?: return response(action,"fail","The saved course could not be read.")
         val index=course.optInt("nextIndex").coerceIn(0,stops.length())
         val remaining=JSONArray()
@@ -49,7 +49,7 @@ object GleoResponses {
             .put("navigationStarted",false)
         if(index==stops.length())return response(action,"success","All stops in the saved course have been completed or skipped.",JSONArray().put(summary))
         return response(action,if(action==RESUME)"asking" else "success",if(action==RESUME)
-            "The remaining course is displayed. The user must confirm sending it to navigation in Moagil. Navigation has not been started."
+            "The remaining course is displayed. The user must confirm sending it to navigation in GMG. Navigation has not been started."
             else "This is the saved course and its remaining stops. Saved travel times may be outdated.",JSONArray().put(summary))
     }
 }

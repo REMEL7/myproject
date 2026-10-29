@@ -25,22 +25,22 @@ object MoagilBrand {
     val line get()=if(night)Color.rgb(58,76,91) else Color.rgb(223,229,231)
 }
 
-/** Two paths meeting at a shared stop. App identity, drawn without bitmap scaling. */
+/** A G-shaped route and forward arrow, drawn without bitmap scaling. */
 class MoagilMark(context:Context):View(context){
     private val paint=Paint(Paint.ANTI_ALIAS_FLAG)
-    init{contentDescription="모아길 로고";importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO}
+    init{contentDescription="GMG 로고";importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO}
     override fun onDraw(canvas:Canvas){
         super.onDraw(canvas)
         val size=minOf(width,height).toFloat()
         canvas.save();canvas.translate((width-size)/2,(height-size)/2);canvas.scale(size/48f,size/48f)
         paint.style=Paint.Style.FILL;paint.color=MoagilBrand.logoNavy
         canvas.drawRoundRect(0f,0f,48f,48f,14f,14f,paint)
-        paint.style=Paint.Style.STROKE;paint.strokeWidth=3.2f;paint.strokeCap=Paint.Cap.ROUND;paint.strokeJoin=Paint.Join.ROUND
+        paint.style=Paint.Style.STROKE;paint.strokeWidth=3.8f;paint.strokeCap=Paint.Cap.ROUND;paint.strokeJoin=Paint.Join.ROUND
         paint.color=Color.WHITE
-        canvas.drawPath(Path().apply{moveTo(11f,32f);lineTo(11f,24f);cubicTo(11f,14f,24f,14f,24f,24f);lineTo(24f,32f)},paint)
+        canvas.drawPath(Path().apply{moveTo(26f,14f);cubicTo(19f,12f,12f,17f,12f,24f);cubicTo(12f,31f,17f,36f,24f,36f);cubicTo(31f,36f,35f,31f,35f,25f);lineTo(25f,25f)},paint)
         paint.color=MoagilBrand.activeBlue
-        canvas.drawPath(Path().apply{moveTo(24f,32f);lineTo(24f,24f);cubicTo(24f,14f,37f,14f,37f,24f)},paint)
-        paint.style=Paint.Style.FILL;canvas.drawCircle(37f,29f,2.2f,paint)
+        paint.style=Paint.Style.FILL
+        canvas.drawPath(Path().apply{moveTo(29f,11f);lineTo(38f,10f);lineTo(37f,19f);lineTo(34f,16f);lineTo(29f,21f);lineTo(27f,19f);lineTo(32f,14f);close()},paint)
         canvas.restore()
     }
 }

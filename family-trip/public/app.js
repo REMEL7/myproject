@@ -16,7 +16,7 @@ function showSuccessToast(text){
 }
 function connected(value){online=value;$('connection').textContent=value?'연결됨':'연결 확인 중';$('connection').classList.toggle('online',value);$('connection').setAttribute('aria-label',value?'차량에 연결됨':'차량 연결 확인 중');updateAddButton();}
 async function api(path='',data){
- const response=await fetch(`/api/rooms/${room}${path}`,{method:data?'POST':'GET',signal:AbortSignal.timeout(12000),headers:{Authorization:`Bearer ${token}`,...(data?{'Content-Type':'application/json'}:{})},...(data?{body:JSON.stringify(data)}:{})});
+ const response=await fetch(`/api/rooms/${room}${path}`,{method:data?'POST':'GET',signal:AbortSignal.timeout(data?.action==='tourDetails'?35000:12000),headers:{Authorization:`Bearer ${token}`,...(data?{'Content-Type':'application/json'}:{})},...(data?{body:JSON.stringify(data)}:{})});
  const result=await response.json();
  if(!response.ok){if(response.status===403){accessLost=true;currentRoom=null;connected(false);$('placeSheet').close();showWelcome(true);renderPlaces();renderMarkers();}throw Object.assign(Error(result.error||'연결을 확인해 주세요.'),{status:response.status});}
  return result;
@@ -38,7 +38,7 @@ function renderSavedPlaces(list){
  $('savedShelf').hidden=!currentRoom||accessLost;document.querySelector('.map-shell').classList.toggle('has-saved-shelf',!!currentRoom&&!accessLost);
  $('savedPlaces').replaceChildren(...list.map(p=>{
   const card=el('button',undefined,'saved-card');card.type='button';card.dataset.placeId=p.id;card.setAttribute('aria-label',p.name+' 지도에서 보기');
-  card.append(el('strong',p.name),el('small',p.address||'주소 정보 없음'));card.onclick=()=>focusSaved(p.id);return card;
+  card.append(el('strong',p.name),el('small',p.address||'주소 정보 없음'));card.onclick=()=>{focusSaved(p.id);openPlace(p);};return card;
  }));
  if(!list.length)$('savedPlaces').append(el('p','지도에서 가고 싶은 곳을 추가해 보세요.','saved-empty'));
  updateSavedSelection();scrollSaved('instant');
@@ -70,22 +70,42 @@ function clearSearchResults(){
 function updateAddButton(){
  if(!selected)return;
  $('closePlace').disabled=adding;const saved=!!existing(selected);$('addPlace').textContent=adding?'추가 중…':saved?'추가한 장소예요':'차량에 추가';$('addPlace').disabled=adding||saved||!online;
+ $('placeSheet').classList.toggle('is-saved',saved);
  $('consentRow').hidden=saved||consented;$('placeNotice').textContent=saved?'수정·삭제는 차량에서 할 수 있어요.':'추가하면 차량의 장소 목록에 바로 보여요.';
 }
 function openPlace(p){
- selected=existing(p)||p;p=selected;$('placeName').textContent=p.name;$('placeAddress').textContent=p.address||'주소 정보 없음';$('placeCategory').textContent=({food:'맛집',cafe:'카페',trip:'가볼 곳',stay:'숙소'})[categoryOf(p)]||'장소';$('placeError').hidden=true;$('sharingConsent').checked=consented;updateAddButton();renderMarkers();
+ selected=existing(p)||p;p=selected;$('placeName').textContent=p.name;$('placeAddress').textContent=p.address||'주소 정보 없음';$('placeCategory').textContent=({food:'맛집',cafe:'카페',trip:'가볼 곳',stay:'숙소',other:'기타'})[categoryOf(p)];$('placeError').hidden=true;$('sharingConsent').checked=consented;updateAddButton();renderMarkers();
  renderPlaceInfo(p);if(map&&point(p)){map.panTo(new kakao.maps.LatLng(Number(p.latitude),Number(p.longitude)));map.setLevel(4);}
  if(!$('placeSheet').open)$('placeSheet').showModal();
 }
 function renderPlaceInfo(p){
- const box=$('placeInfo'),info=p.info;box.replaceChildren();box.hidden=false;
- if(info){
-  if(info.categoryName)box.append(el('p',info.categoryName,'info-category'));
-  if(info.phone)box.append(el('p','전화 '+info.phone));
-  if(/^https:\/\/place\.map\.kakao\.com\/\d+$/.test(info.placeUrl||'')){const link=el('a','카카오맵에서 영업시간·상세 보기');link.href=info.placeUrl;link.target='_blank';link.rel='noopener noreferrer';box.append(link);}
-  box.append(el('small','카카오 검색 · '+new Date(info.checkedAt).toLocaleDateString('ko-KR',{timeZone:'Asia/Seoul'})+' 확인'));
- }else box.append(el('p','가게 정보는 차량에서 불러올 수 있어요.'));
- box.append(el('p','영업시간은 자동 제공되지 않아 상세페이지에서 확인해 주세요.','help'));
+ const box=$('placeInfo'),info=p.info,visit=p.visitInfo;box.replaceChildren();box.hidden=false;
+ function group(title,rows){
+  rows=rows.filter(([,value])=>value);if(!rows.length)return false;
+  box.append(el('h3',title));const list=el('dl',undefined,'detail-fields');
+  for(const [label,value] of rows)list.append(el('dt',label),el('dd',String(value).replace(/([^\s])\[/g,'$1\n[')));
+  box.append(list);return true;
+ }
+ if(info?.phone)group('연락처',[['전화',info.phone]]);
+ if(visit?.status==='matched'){
+  if(!group('운영정보',[['영업·이용시간',visit.operatingHours],['휴일',visit.restDays],['요금',visit.fees],['메뉴',visit.menu],['입실',visit.checkIn],['퇴실',visit.checkOut]]))box.append(el('p','제공된 운영정보가 없어요.','detail-empty'));
+ }else box.append(el('p',visit?'등록된 운영정보가 없어요.':'아직 확인한 운영정보가 없어요.','detail-empty'));
+ if(p.note)group('메모',[['함께 남긴 메모',p.note]]);
+ const canLookup=config?.tourInfoEnabled&&p.id&&(!visit||!Number.isFinite(Date.parse(visit.checkedAt))||Date.now()-Date.parse(visit.checkedAt)>=86400000);
+ if(canLookup){
+  const load=el('button','운영정보 확인','visit-load');load.type='button';load.disabled=!online;
+  const feedback=el('p','','detail-feedback');feedback.hidden=true;
+  load.onclick=async()=>{load.disabled=true;load.textContent='확인 중…';feedback.hidden=true;try{const r=await api('/places',{action:'tourDetails',placeId:p.id});currentRoom=r;revision=r.revision;renderPlaces();}catch{load.disabled=false;load.textContent='다시 확인';feedback.textContent='정보를 확인하지 못했어요. 잠시 후 다시 눌러주세요.';feedback.hidden=false;}};
+  box.append(load,feedback);
+ }
+ if(/^https:\/\/place\.map\.kakao\.com\/\d+$/.test(info?.placeUrl||'')){const link=el('a','카카오맵에서 더 보기 ↗','detail-map-link');link.href=info.placeUrl;link.target='_blank';link.rel='noopener noreferrer';box.append(link);}
+ if(info||visit){
+  const sources=el('details',undefined,'detail-sources');sources.append(el('summary','출처와 조회일'));
+  const date=value=>new Date(value).toLocaleDateString('ko-KR',{timeZone:'Asia/Seoul'});
+  if(info)sources.append(el('small','카카오 검색 · '+date(info.checkedAt)));
+  if(visit)sources.append(el('small','한국관광공사 TourAPI · '+date(visit.checkedAt)));
+  box.append(sources);
+ }
 }
 function categoryOf(p){return ['food','cafe','trip','stay','other'].includes(p.category)?p.category:({FD6:'food',CE7:'cafe',AT4:'trip',CT1:'trip',AD5:'stay'})[p.categoryCode]||'other';}
 async function addPlace(){
@@ -122,7 +142,7 @@ async function refresh(){
 function renderMarkers(){
  if(!map)return;for(const m of markers)m.setMap(null);markers=[];
  const list=places().filter(point).map(p=>({p,saved:true}));for(const p of results)if(!list.some(item=>samePlace(item.p,p)))list.push({p,saved:false});
- for(const {p,saved} of list){const button=el('button',p.name,'map-marker'+(saved?' saved':'')+(selected&&samePlace(selected,p)?' selected':''));button.type='button';button.setAttribute('aria-label',p.name+' 지도에서 선택');button.onclick=()=>saved?focusSaved(p.id):openPlace(p);markers.push(new kakao.maps.CustomOverlay({position:new kakao.maps.LatLng(Number(p.latitude),Number(p.longitude)),content:button,yAnchor:1.3,map}));}
+ for(const {p,saved} of list){const button=el('button',p.name,'map-marker'+(saved?' saved':'')+(selected&&samePlace(selected,p)?' selected':''));button.type='button';button.setAttribute('aria-label',p.name+' 지도에서 선택');button.onclick=()=>{if(saved)focusSaved(p.id);openPlace(p);};markers.push(new kakao.maps.CustomOverlay({position:new kakao.maps.LatLng(Number(p.latitude),Number(p.longitude)),content:button,yAnchor:1.3,map}));}
  $('fitMap').disabled=!list.length;
 }
 function fitPoints(list){if(!map||!list.length)return;const bounds=new kakao.maps.LatLngBounds();for(const p of list)if(point(p))bounds.extend(new kakao.maps.LatLng(Number(p.latitude),Number(p.longitude)));map.relayout();map.setBounds(bounds,65,45,65,45);}

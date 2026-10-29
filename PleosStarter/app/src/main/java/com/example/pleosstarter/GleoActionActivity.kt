@@ -33,7 +33,7 @@ class GleoActionActivity:Activity(){
         main.postDelayed(deadline,5500)
         worker.execute{
             val result=runCatching{GleoResponses.build(action,readFreshRoom())}.getOrElse{
-                GleoResponses.response(action,"fail","The current group could not be loaded. Check the Moagil server connection.")
+                GleoResponses.response(action,"fail","The current group could not be loaded. Check the GMG server connection.")
             }
             main.post{complete(result,true)}
         }

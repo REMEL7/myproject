@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">
+  <title>GMG</title>
   <rect width="48" height="48" rx="14" fill="#002c5f"/>
-  <path d="M11 32v-8c0-10 13-10 13 0v8" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M24 32v-8c0-10 13-10 13 0" fill="none" stroke="#00aad2" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
-  <circle cx="37" cy="29" r="2.2" fill="#00aad2"/>
+  <path d="M26 14C19 12 12 17 12 24C12 31 17 36 24 36C31 36 35 31 35 25H25" fill="none" stroke="#fff" stroke-width="3.8" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M29 11L38 10L37 19L34 16L29 21L27 19L32 14Z" fill="#00aad2"/>
 </svg>

@@ -5,6 +5,7 @@ import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 import {loadEnvFile} from 'node:process';
 import {timing, suggestCourses, kakaoRoadProvider} from './planner.mjs';
+import {tourApiProvider} from './tourapi.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 try { loadEnvFile(path.join(here, '.env')); } catch (e) { if (e.code !== 'ENOENT') throw e; }
@@ -12,7 +13,7 @@ const token = () => randomBytes(24).toString('base64url');
 const fail = (status, message) => { throw Object.assign(new Error(message), {status}); };
 const text = (value, max = 120) => typeof value === 'string' ? value.trim().slice(0, max) : '';
 
-export function createRelay({dataDir = path.join(here, 'data'), publicUrl = process.env.PUBLIC_URL || '', kakaoKey = process.env.KAKAO_REST_API_KEY || '', mapKey = process.env.KAKAO_JAVASCRIPT_KEY || '', mobilityKey = process.env.KAKAO_MOBILITY_REST_API_KEY || kakaoKey, fetchPlaces = fetch, roadProvider = null, now = Date.now, roomLifetimeMs = 30*24*60*60*1000} = {}) {
+export function createRelay({dataDir = path.join(here, 'data'), publicUrl = process.env.PUBLIC_URL || '', kakaoKey = process.env.KAKAO_REST_API_KEY || '', mapKey = process.env.KAKAO_JAVASCRIPT_KEY || '', mobilityKey = process.env.KAKAO_MOBILITY_REST_API_KEY || kakaoKey, tourKey=process.env.TOUR_API_KEY||'',fetchTour=fetch,fetchPlaces = fetch, roadProvider = null, now = Date.now, roomLifetimeMs = 30*24*60*60*1000} = {}) {
   mkdirSync(dataDir, {recursive:true});
   const dbFile = path.join(dataDir, 'rooms.json');
   let rooms = {};
@@ -22,6 +23,7 @@ export function createRelay({dataDir = path.join(here, 'data'), publicUrl = proc
   let migrated=false;for(const r of Object.values(rooms)){if(!r.expiresAt){r.expiresAt=now()+roomLifetimeMs;migrated=true;}}if(migrated)save();
   const roadLookup=roadProvider || (mobilityKey?kakaoRoadProvider(mobilityKey):null);
   const planning=new Set();
+  const tourLookup=tourKey?tourApiProvider(tourKey,fetchTour,now):null,tourPending=new Set();
   const placeInfoCache=new Map();
   const rememberPlace=doc=>{
     if(!/^\d+$/.test(String(doc.id)))return null;
@@ -33,7 +35,7 @@ export function createRelay({dataDir = path.join(here, 'data'), publicUrl = proc
   const ballotView=(b,r)=>!b?null:{id:b.id,status:b.status,candidateIds:b.candidateIds,castCount:Object.keys(b.votes).length,closedAt:b.closedAt||null,cancelled:!!b.cancelled,...(b.status==='closed'?{counts:b.counts,winnerIds:b.winnerIds,candidateNames:Object.fromEntries(b.candidateIds.map(id=>[id,[...r.places,...(r.deletedPlaces||[])].find(p=>p.id===id)?.name||'삭제된 장소']))}:{})};
   const snapshot=r=>{
     const secret=!!r.ballot;
-    return {id:r.id,expiresAt:r.expiresAt,closedAt:r.closedAt||null,name:r.name,groupType:r.groupType||'together',decisionMode:r.decisionMode||'',selectedId:r.selectedId,revision:r.revision,canUndoPlaceDelete:!!r.deletedPlaces?.length,ballot:ballotView(r.ballot,r),plans:r.plans||[],course:r.course||null,places:r.places.map(p=>({id:p.id,name:p.name,address:p.address,sender:p.sender,note:p.note,category:p.category||'other',info:p.info||null,latitude:p.latitude,longitude:p.longitude,createdAt:p.createdAt,demo:!!p.demo,opensAt:p.opensAt||'',closesAt:p.closesAt||'',stayMinutes:p.stayMinutes||60,mustVisit:!!p.mustVisit,hoursSource:p.opensAt?'직접 확인':'확인 필요',votes:secret?null:p.voters.length,supporters:secret?[]:p.voters.map(id=>r.members?.[id]).filter(Boolean),unnamedVotes:secret?null:p.voters.filter(id=>!r.members?.[id]).length}))};
+    return {id:r.id,expiresAt:r.expiresAt,closedAt:r.closedAt||null,name:r.name,groupType:r.groupType||'together',decisionMode:r.decisionMode||'',selectedId:r.selectedId,revision:r.revision,canUndoPlaceDelete:!!r.deletedPlaces?.length,ballot:ballotView(r.ballot,r),plans:r.plans||[],course:r.course||null,places:r.places.map(p=>({id:p.id,name:p.name,address:p.address,sender:p.sender,note:p.note,category:p.category||'other',info:p.info||null,visitInfo:p.visitInfo||null,latitude:p.latitude,longitude:p.longitude,createdAt:p.createdAt,demo:!!p.demo,opensAt:p.opensAt||'',closesAt:p.closesAt||'',stayMinutes:p.stayMinutes||60,mustVisit:!!p.mustVisit,hoursSource:p.opensAt?'직접 확인':'확인 필요',votes:secret?null:p.voters.length,supporters:secret?[]:p.voters.map(id=>r.members?.[id]).filter(Boolean),unnamedVotes:secret?null:p.voters.filter(id=>!r.members?.[id]).length}))};
   };
   const owner=(r,auth)=>{if(auth!==r.ownerToken)fail(403,'이 작업은 차량의 모임 진행자만 할 수 있습니다.');};
   const changed=r=>{r.revision++;save();return snapshot(r);};
@@ -63,7 +65,7 @@ export function createRelay({dataDir = path.join(here, 'data'), publicUrl = proc
         const type = file.endsWith('.svg') ? 'image/svg+xml; charset=utf-8' : file.endsWith('.js') ? 'text/javascript; charset=utf-8' : file.endsWith('.css') ? 'text/css; charset=utf-8' : 'text/html; charset=utf-8';
         return reply(res, 200, readFileSync(path.join(here, 'public', file), 'utf8'), type);
       }
-      if (req.method === 'GET' && url.pathname === '/api/config') return reply(res, 200, {publicUrl:publicUrl || 'http://localhost:8787', searchEnabled:!!kakaoKey, mapEnabled:!!mapKey, roadRoutingEnabled:!!roadLookup, recommendationEngine:'constraint-search', mapJavascriptKey:mapKey, localOnly:!publicUrl});
+      if (req.method === 'GET' && url.pathname === '/api/config') return reply(res, 200, {publicUrl:publicUrl || 'http://localhost:8787', searchEnabled:!!kakaoKey, mapEnabled:!!mapKey, roadRoutingEnabled:!!roadLookup,tourInfoEnabled:!!tourLookup, recommendationEngine:'constraint-search', mapJavascriptKey:mapKey, localOnly:!publicUrl});
       if (req.method === 'POST' && url.pathname === '/api/rooms') {
         if (!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress)) fail(403, '여행방은 차량 또는 PC 내부에서만 만들 수 있습니다.');
         const input = await body(req);
@@ -170,6 +172,16 @@ export function createRelay({dataDir = path.join(here, 'data'), publicUrl = proc
         return reply(res,200,changed(r));
       }
       if (match[2] === 'places') {
+        if(input.action==='tourDetails'){
+          if(!tourLookup)fail(503,'TourAPI 인증키를 서버에 입력해 주세요.');
+          const p=r.places.find(p=>p.id===input.placeId);if(!p)fail(404,'장소가 없습니다.');
+          if(p.visitInfo&&now()-Date.parse(p.visitInfo.checkedAt)<86400000)return reply(res,200,snapshot(r));
+          if(tourPending.has(r.id))fail(429,'다른 장소 정보를 확인 중이에요. 잠시 후 다시 눌러주세요.');
+          tourPending.add(r.id);
+          try{const info=await tourLookup(p);if(!r.places.includes(p))fail(409,'이미 삭제된 장소예요.');p.visitInfo=info;return reply(res,200,changed(r));}
+          catch(error){if(error.status)throw error;fail(502,error.message||'운영정보를 불러오지 못했어요.');}
+          finally{tourPending.delete(r.id);}
+        }
         if(input.action==='details'){
           owner(r,auth);const p=r.places.find(p=>p.id===input.placeId);if(!p)fail(404,'장소가 없습니다.');
           if(p.info&&now()-Date.parse(p.info.checkedAt)<86400000)return reply(res,200,snapshot(r));
@@ -270,7 +282,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     const approvedUntil=Number(process.env.PHONE_SHARE_UNTIL || Date.now()+30*60*1000);
     if(!Number.isFinite(approvedUntil)||approvedUntil<=Date.now()){relay.setPublicUrl('');console.log('Phone sharing approval expired; local relay only.');}
     else {
-    const shareMs=Math.min(60*60*1000,approvedUntil-Date.now());
+    const shareMs=Math.min(24*60*60*1000,approvedUntil-Date.now());
     const lan = http.createServer(relay.listeners('request')[0]);
     lan.listen(port, host, () => console.log(`Temporary phone listener: ${host}:${port} (${Math.ceil(shareMs/60000)} minutes remaining)`));
     setTimeout(() => {lan.close();lan.closeAllConnections();relay.setPublicUrl('');console.log('Phone listener closed; local relay remains available.');},shareMs).unref();

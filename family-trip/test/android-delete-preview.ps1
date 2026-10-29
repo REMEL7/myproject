@@ -1,4 +1,4 @@
-﻿$ErrorActionPreference='Stop'
+$ErrorActionPreference='Stop'
 $adb='C:/Users/hyeon/AppData/Local/Android/Sdk/platform-tools/adb.exe'
 $package='com.example.pleosstarter'
 $workspace='D:/ChatGPT/현대자동차_플레오스'
@@ -44,7 +44,7 @@ try{
     if($LASTEXITCODE -ne 0){throw 'QA preference staging failed'}
     & $adb -s emulator-5554 shell am start -W -n "$package/.FamilyTripActivity" | Out-Null
     $doc=Screen-Xml
-    if(-not($doc.SelectNodes('//node') | Where-Object {$_.text -eq '모아길'})){throw 'QA room not visible'}
+    if(-not($doc.SelectNodes('//node') | Where-Object {$_.text -eq 'GMG'})){throw 'QA room not visible'}
     Tap-Text '장소'
     Tap-PlaceMenu
     Tap-Text '이 장소 삭제'

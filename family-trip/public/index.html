@@ -1,8 +1,8 @@
 <!doctype html>
 <html lang="ko">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#f6f3f2"><meta name="description" content="지도에서 가고 싶은 곳을 찾아 차량에 추가하세요."><title>모아길 · 장소 추가</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#f6f3f2"><meta name="description" content="지도에서 가고 싶은 곳을 찾아 차량에 추가하세요."><title>GMG · 장소 추가</title><link rel="icon" type="image/svg+xml" href="/moagil-mark.svg?v=gmg"><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
 <body>
-<header class="topbar"><div class="brand"><img src="/moagil-mark.svg" width="34" height="34" alt=""><span>모아길</span></div><span id="connection" class="connection" role="status">연결 중</span></header>
+<header class="topbar"><div class="brand"><img src="/moagil-mark.svg?v=gmg" width="34" height="34" alt=""><span>GMG</span></div><span id="connection" class="connection" role="status">연결 중</span></header>
 <main class="map-shell">
  <section class="map-stage" aria-label="장소 지도"><div id="map" hidden></div><div id="mapFallback" class="map-fallback"><span aria-hidden="true">⌖</span><p id="mapHint">지도를 불러오고 있어요.</p></div></section>
  <section id="searchDock" class="search-dock" aria-label="장소 검색" hidden>
@@ -22,7 +22,11 @@
  </div>
  <section id="welcome" class="welcome-card" hidden><h1>차량 QR로 연결해 주세요</h1><p>연결하면 지도에서 가고 싶은 곳을<br>찾아 추가할 수 있어요.</p><details><summary>초대 링크로 연결하기</summary><form id="joinForm"><input id="joinLink" type="url" placeholder="받은 초대 링크" aria-label="초대 링크" required><button class="primary">연결</button></form></details></section>
 </main>
-<dialog id="placeSheet" class="sheet" aria-labelledby="placeName"><div class="sheet-handle" aria-hidden="true"></div><div class="sheet-top"><span id="placeCategory" class="eyebrow">장소</span><button id="closePlace" class="icon-button" aria-label="장소 정보 닫기">×</button></div><h2 id="placeName"></h2><p id="placeAddress" class="address"></p><div id="placeInfo" class="place-info" hidden></div><p id="placeNotice" class="help"></p><label id="consentRow" class="consent-row"><input id="sharingConsent" type="checkbox"><span>이 장소를 모임과 공유하는 데 동의해요.</span></label><p id="placeError" class="field-error" role="alert" hidden></p><button id="addPlace" class="primary full">차량에 추가</button><a class="privacy-link" href="/privacy" target="_blank" rel="noopener noreferrer">정보 저장과 삭제</a></dialog>
+<dialog id="placeSheet" class="sheet detail-dialog" aria-labelledby="placeName">
+ <header class="detail-header"><div class="sheet-top"><span id="placeCategory" class="eyebrow">장소</span><button id="closePlace" class="icon-button" aria-label="장소 정보 닫기">×</button></div><h2 id="placeName"></h2><p id="placeAddress" class="address"></p></header>
+ <div class="detail-body"><div id="placeInfo" class="place-info" hidden></div></div>
+ <footer class="detail-footer"><p id="placeNotice" class="help"></p><label id="consentRow" class="consent-row"><input id="sharingConsent" type="checkbox"><span>이 장소를 모임과 공유하는 데 동의해요.</span></label><p id="placeError" class="field-error" role="alert" hidden></p><button id="addPlace" class="primary full">차량에 추가</button><a class="privacy-link" href="/privacy" target="_blank" rel="noopener noreferrer">정보 저장과 삭제</a></footer>
+</dialog>
 </body>
 </html>
 

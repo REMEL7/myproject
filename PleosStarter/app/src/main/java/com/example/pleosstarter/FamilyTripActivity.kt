@@ -71,7 +71,6 @@ class FamilyTripActivity : Activity() {
     private var connected = false
     private var lastSync = ""
     private val filterButtons = mutableMapOf<String, Button>()
-    private val favorites by lazy { prefs.getStringSet("favorites", emptySet())!!.toMutableSet() }
     private var roomId = ""
     private var ownerToken = ""
     private var joinToken = ""
@@ -150,7 +149,7 @@ class FamilyTripActivity : Activity() {
         room?.remove("ownerToken");room?.remove("joinToken");room?.let{prefs.edit().putString("cachedRoom",it.toString()).apply()}
         activeTab=savedInstanceState?.getString("activeTab")?.takeIf{it in setOf("home","places","course","settings")} ?: "home"
         intent.getStringExtra(GleoActionActivity.TAB_EXTRA)?.takeIf{it in setOf("course","ballot")}?.let{activeTab=it}
-        categoryFilter=savedInstanceState?.getString("categoryFilter") ?: "all"
+        categoryFilter=savedInstanceState?.getString("categoryFilter")?.takeIf{it in setOf("all","food","cafe","trip","stay","other")} ?: "all"
         sortMode=savedInstanceState?.getString("sortMode")?.takeIf{it in setOf("recent","distance")} ?: "recent"
         restoredScroll=savedInstanceState?.getInt("scrollY") ?: 0
         buildScreen()
@@ -181,7 +180,7 @@ class FamilyTripActivity : Activity() {
         val rail=column().apply { setPadding(dp(18),dp(16),dp(18),dp(16)); background=surface(MoagilBrand.surface,20) }
         root.addView(rail,LinearLayout.LayoutParams(dp(198),-1).apply { rightMargin=dp(24) })
         rail.addView(View(this),LinearLayout.LayoutParams(1,dp(10)))
-        subtitle=label("모아길",21,ink).apply { typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL) }
+        subtitle=label("GMG",21,ink).apply { typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL) }
         rail.addView(LinearLayout(this).apply{gravity=Gravity.CENTER_VERTICAL;addView(MoagilMark(this@FamilyTripActivity),LinearLayout.LayoutParams(dp(34),dp(34)).apply{rightMargin=dp(10)});addView(subtitle,LinearLayout.LayoutParams(0,-2,1f))})
         summary=label("일행의 추천을 기다리고 있어요",13,railText)
         rail.addView(summary)
@@ -204,7 +203,7 @@ class FamilyTripActivity : Activity() {
         val tools=LinearLayout(this).apply { gravity=Gravity.CENTER_VERTICAL }
         val filterScroll=HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false }
         val filters=LinearLayout(this)
-        listOf("all" to "전체", "food" to "맛집", "cafe" to "카페", "trip" to "가볼 곳", "stay" to "숙소", "favorites" to "저장한 곳").forEach { (key,title) ->
+        listOf("all" to "전체", "food" to "맛집", "cafe" to "카페", "trip" to "가볼 곳", "stay" to "숙소", "other" to "기타").forEach { (key,title) ->
             val b=softButton(title) { categoryFilter=key; updateFilters(); renderCards() }
             filterButtons[key]=b
             filters.addView(b,LinearLayout.LayoutParams(-2,dp(46)).apply { rightMargin=dp(7) })
@@ -228,7 +227,7 @@ class FamilyTripActivity : Activity() {
         val header=LinearLayout(this).apply {gravity=Gravity.CENTER_VERTICAL}
         header.addView(MoagilMark(this),LinearLayout.LayoutParams(dp(if(slimScreen)32 else 38),dp(if(slimScreen)32 else 38)).apply{rightMargin=dp(12)})
         val titles=column()
-        subtitle=label("모아길",if(slimScreen)23 else 27,ink).apply {typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL);maxLines=1;ellipsize=android.text.TextUtils.TruncateAt.END}
+        subtitle=label("GMG",if(slimScreen)23 else 27,ink).apply {typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL);maxLines=1;ellipsize=android.text.TextUtils.TruncateAt.END}
         titles.addView(subtitle)
         header.addView(titles,LinearLayout.LayoutParams(0,-2,1f))
         header.addView(softButton("초대 QR") {showInvite()}.apply {textSize=26f},LinearLayout.LayoutParams(dp(95),dp(49)).apply {leftMargin=dp(8)})
@@ -243,7 +242,7 @@ class FamilyTripActivity : Activity() {
         root.addView(status,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(if(slimScreen)5 else 7);bottomMargin=dp(if(slimScreen)8 else 12)})
         val tools=LinearLayout(this).apply{gravity=Gravity.CENTER_VERTICAL}
         val filters=LinearLayout(this)
-        listOf("all" to "전체", "favorites" to "저장", "food" to "맛집", "cafe" to "카페", "trip" to "가볼 곳", "stay" to "숙소").forEach{(key,title)->
+        listOf("all" to "전체", "food" to "맛집", "cafe" to "카페", "trip" to "가볼 곳", "stay" to "숙소", "other" to "기타").forEach{(key,title)->
             val b=softButton(title){categoryFilter=key;updateFilters();renderCards()}
             filterButtons[key]=b
             filters.addView(b,LinearLayout.LayoutParams(-2,dp(48)).apply{rightMargin=dp(6)})
@@ -416,21 +415,21 @@ class FamilyTripActivity : Activity() {
         if(!canInteract())return
         lateinit var sheet:AlertDialog
         val content=column().apply{setPadding(dp(20),dp(14),dp(20),dp(10))}
-        content.addView(label(p.getString("name"),20,ink))
-        content.addView(choiceRow("장소 수정"){sheet.dismiss();showEditPlace(p)})
-        separator(content)
-        content.addView(choiceRow("방문 일정 설정"){sheet.dismiss();showTiming(p)})
-        separator(content)
-        val remove=choiceRow("이 장소 삭제"){sheet.dismiss();confirmDeletePlace(p)}
+        fun option(title:String,action:()->Unit)=choiceRow(title,action=action).apply{
+            minimumHeight=dp(72);background=surface(soft,14);setPadding(dp(16),dp(12),dp(16),dp(12));layoutParams=LinearLayout.LayoutParams(-1,-2).apply{bottomMargin=dp(10)}
+        }
+        content.addView(option("장소 수정"){sheet.dismiss();showEditPlace(p)})
+        content.addView(option("방문 일정 설정"){sheet.dismiss();showTiming(p)})
+        val remove=option("장소 삭제"){sheet.dismiss();confirmDeletePlace(p)}
         (remove.getChildAt(0) as LinearLayout).let{(it.getChildAt(0) as TextView).setTextColor(MoagilBrand.danger)}
         content.addView(remove)
-        sheet=dialog().setView(ScrollView(this).apply{addView(content)}).setNegativeButton("닫기",null).create();sheet.show()
+        sheet=placePopup().setTitle(p.getString("name")).setView(content).setNegativeButton("닫기",null).create();sheet.show()
     }
     private fun leaveLocalSession(){
         undoPlaceId="";undoUntil=0L;ui.removeCallbacks(expireUndo)
         sessionGeneration++;loading=false
         prefs.edit().remove("roomId").remove("ownerToken").remove("joinToken").remove("cachedRoom").remove("favorites").putBoolean("sessionDetached",true).apply()
-        favorites.clear();roomId="";ownerToken="";joinToken="";room=null;revision=-1;connected=false
+        roomId="";ownerToken="";joinToken="";room=null;revision=-1;connected=false
         dismissSheets();refreshStatus();renderCards()
     }
     private fun showPrivacy(){
@@ -456,12 +455,12 @@ class FamilyTripActivity : Activity() {
     }
     private fun showGleoGuide(){
         val content=column().apply{setPadding(dp(20),dp(10),dp(20),dp(10))}
-        content.addView(label("글레오와 모아길 · 시험 단계",21,ink))
+        content.addView(label("글레오와 GMG · 시험 단계",21,ink))
         val installed=runCatching{packageManager.getApplicationInfo(GleoActionActivity.GLEO_PACKAGE,0)}.isSuccess
         content.addView(label(if(installed)"이 기기에서 글레오 앱을 찾았어요." else "이 기기에서 지원되는 글레오 앱을 찾지 못했어요.",15,mint))
         content.addView(label("앱 기능 연결은 준비됐어요. 실제 음성 호출은 스키마 등록·승인과 기기 검증이 필요해요.",15))
         content.addView(label("연결할 음성 명령",17,ink))
-        listOf("모아길 저장 코스 보여줘","모아길 투표 결과 알려줘","모아길 코스 이어가자").forEach{content.addView(label("· $it",16,ink))}
+        listOf("GMG 저장 코스 보여줘","GMG 투표 결과 알려줘","GMG 코스 이어가자").forEach{content.addView(label("· $it",16,ink))}
         content.addView(label("진행 중인 비밀투표 결과는 알려주지 않아요. 코스 이어가기는 화면을 열며, 출발은 직접 확인해 주세요.",14))
         dialog().setView(ScrollView(this).apply{addView(content)}).setPositiveButton("확인",null).show()
     }
@@ -505,7 +504,7 @@ class FamilyTripActivity : Activity() {
         content.addView(presets)
         val required=CupertinoToggle(this).apply{text="코스에 꼭 포함하기";textSize=28f;setTextColor(ink);isChecked=p.optBoolean("mustVisit")}
         content.addView(required)
-        dialog().setTitle("${p.getString("name")} · 방문 조건").setView(ScrollView(this).apply{addView(content)}).setNegativeButton("닫기",null).setPositiveButton("저장"){_,_->
+        placePopup().setTitle("${p.getString("name")} · 방문 조건").setView(content).setNegativeButton("닫기",null).setPositiveButton("저장"){_,_->
             val duration=stay.text.toString().toIntOrNull()
             if(duration==null){Toast.makeText(this,"머무를 시간을 확인해 주세요",Toast.LENGTH_LONG).show();return@setPositiveButton}
             postRoom("timing",JSONObject().put("placeId",p.getString("id")).put("opensAt",opens.text.toString().trim()).put("closesAt",closes.text.toString().trim()).put("stayMinutes",duration).put("mustVisit",required.isChecked))
@@ -725,6 +724,7 @@ class FamilyTripActivity : Activity() {
     private fun softButton(value:String,action:()->Unit)=button(value,action).apply { setTextColor(mint); background=surface(Color.TRANSPARENT,10);textSize=26f }
     private fun railButton(value:String,action:()->Unit)=softButton(value,action).apply {setTextColor(mint);background=surface(Color.TRANSPARENT,12);gravity=Gravity.START or Gravity.CENTER_VERTICAL}
     private fun dialog()=CupertinoSheetBuilder(this,{canInteract()}){sheets.removeAll{old->!old.isShowing};sheets.add(it)}
+    private fun placePopup()=CupertinoSheetBuilder(this,{canInteract()},centered=true){sheets.removeAll{old->!old.isShowing};sheets.add(it)}
     private fun journeyIllustration()=object:View(this){
         private val paint=android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
         override fun onDraw(c:android.graphics.Canvas){
@@ -772,7 +772,7 @@ class FamilyTripActivity : Activity() {
         val c = URL(baseUrl() + path).openConnection() as HttpURLConnection
         c.instanceFollowRedirects=false
         require(BuildConfig.DEBUG || URI(baseUrl()).scheme=="https"){"보안 연결 주소가 필요합니다."}
-        c.connectTimeout = 5000; c.readTimeout = if(path.endsWith("/plan"))30000 else 7000
+        c.connectTimeout = 5000; c.readTimeout = if(path.endsWith("/plan")||path.endsWith("/places"))35000 else 7000
         if (ownerToken.isNotBlank()) c.setRequestProperty("Authorization", "Bearer $ownerToken")
         try {
             if (data != null) {
@@ -810,7 +810,7 @@ class FamilyTripActivity : Activity() {
                     lastSync=java.text.SimpleDateFormat("HH:mm",java.util.Locale.KOREA).format(java.util.Date())
                     if (revision != result.getInt("revision")) prefs.edit().putString("cachedRoom",result.toString()).apply()
                     room = result
-                    subtitle.text = "모아길"
+                    subtitle.text = "GMG"
                     refreshStatus()
                     if (revision != result.getInt("revision")||sharingChanged) { revision = result.getInt("revision"); renderCards() }
                 }
@@ -848,7 +848,7 @@ class FamilyTripActivity : Activity() {
         }
         val r=room
         if(r==null){cards.addView(label("모임을 불러오고 있어요",24,ink));cards.addView(label("잠시만 기다려 주세요. 연결되면 추천 장소가 나타나요.",17));return}
-        subtitle.text="모아길"
+        subtitle.text="GMG"
         val source=r.getJSONArray("places")
         val all=(0 until source.length()).map { source.getJSONObject(it) }
         val ballot=r.optJSONObject("ballot")
@@ -859,7 +859,7 @@ class FamilyTripActivity : Activity() {
         if(activeTab=="course"){renderCoursePane(r);return}
         if(activeTab=="settings"){renderSettingsPane(r);return}
         if(activeTab=="ballot"){renderBallotPane(r);return}
-        var sorted=all.filter { categoryFilter=="all" || if(categoryFilter=="favorites") favorites.contains(it.getString("id")) else it.optString("category")==categoryFilter }
+        var sorted=all.filter { categoryFilter=="all" || placeCategory(it)==categoryFilter }
         sorted=when(sortMode){
             "recent" -> sorted.sortedByDescending { it.optLong("createdAt") }
             "distance" -> validLocation()?.let { location -> sorted.sortedBy { distanceKm(location.latitude,location.longitude,it.getDouble("latitude"),it.getDouble("longitude")) } } ?: sorted
@@ -869,7 +869,7 @@ class FamilyTripActivity : Activity() {
             val empty=column().apply { setPadding(dp(28),dp(30),dp(28),dp(25));background=surface(MoagilBrand.surface,20) }
             empty.addView(label("↗",42,mint))
             empty.addView(label(if(all.isEmpty()) "가고 싶은 곳을 추가해 보세요" else "이 분류에는 아직 장소가 없어요",23,ink))
-            empty.addView(label(if(categoryFilter=="favorites") "장소 카드의 저장 버튼을 눌러\n다음에 가고 싶은 곳을 따로 모아보세요." else "QR로 휴대폰을 연결하고\n가고 싶은 곳을 추가해 보세요.",16))
+            empty.addView(label("QR로 휴대폰을 연결하고\n가고 싶은 곳을 추가해 보세요.",16))
             if(all.isEmpty())empty.addView(button("일행 초대 QR 열기") {showInvite()})
             cards.addView(empty);return
         }
@@ -880,17 +880,11 @@ class FamilyTripActivity : Activity() {
             val selected=r.optString("selectedId")==p.getString("id")
             val card=column().apply { setPadding(dp(if(compactScreen)15 else 18),dp(if(compactScreen)12 else 15),dp(if(compactScreen)15 else 18),dp(if(compactScreen)12 else 15));background=GradientDrawable().apply {setColor(MoagilBrand.surface);cornerRadius=dp(18).toFloat();setStroke(dp(1),if(selected)MoagilBrand.activeBlue else MoagilBrand.line)} }
             row!!.addView(card,LinearLayout.LayoutParams(0,-2,1f).apply { if(index%columns==0 && columns==2) rightMargin=dp(12) })
-            val category=when(p.optString("category")){"food"->"맛집";"cafe"->"카페";"trip"->"가볼 곳";"stay"->"숙소";else->"추천 장소"}
+            val category=when(placeCategory(p)){"food"->"맛집";"cafe"->"카페";"trip"->"가볼 곳";"stay"->"숙소";else->"기타"}
                         val top=LinearLayout(this).apply { gravity=Gravity.CENTER_VERTICAL;setPadding(0,0,0,dp(if(slimScreen)0 else 9)) }
-            val categoryIcon=when(p.optString("category")){"food"->"食";"cafe"->"☕";"trip"->"↗";"stay"->"⌂";else->"⌖"}
-            if(!slimScreen)top.addView(label(categoryIcon,19,mint).apply { gravity=Gravity.CENTER;background=surface(soft,11) },LinearLayout.LayoutParams(dp(39),dp(39)).apply{rightMargin=dp(10)})
+            val categoryIcon=when(placeCategory(p)){"food"->"🍚";"cafe"->"☕";"trip"->"🏞️";"stay"->"🏨";else->"📍"}
+            top.addView(label(categoryIcon,19,mint).apply { gravity=Gravity.CENTER;background=surface(soft,11) },LinearLayout.LayoutParams(dp(39),dp(39)).apply{rightMargin=dp(10)})
             top.addView(label(if(selected)"선택한 목적지" else if(p.optBoolean("demo")) "연동 시험 · ${index+1}" else "$category  ·  ${index+1}",12,mint),LinearLayout.LayoutParams(0,-2,1f))
-            val saved=favorites.contains(p.getString("id"))
-            val save=softButton(if(saved)"★" else "☆") {
-                val id=p.getString("id");if(!favorites.add(id))favorites.remove(id)
-                prefs.edit().putStringSet("favorites",favorites.toSet()).apply();renderCards()
-            }.apply{contentDescription="${p.getString("name")} ${if(saved)"즐겨찾기 해제" else "즐겨찾기 추가"}"}
-            top.addView(save,LinearLayout.LayoutParams(dp(48),dp(48)))
             val more=softButton("⋯"){}
             more.contentDescription="${p.getString("name")} 관리 메뉴"
             more.setOnClickListener{showPlaceMenu(more,p)}
@@ -916,12 +910,13 @@ class FamilyTripActivity : Activity() {
         if(columns==2 && sorted.size%2==1)row!!.addView(View(this),LinearLayout.LayoutParams(0,1,1f))
         if(restoredScroll>0){val y=restoredScroll;restoredScroll=0;cardsScroll.post{cardsScroll.scrollTo(0,y)}}
     }
+    private fun placeCategory(p:JSONObject)=p.optString("category").takeIf{it in setOf("food","cafe","trip","stay")} ?: "other"
     private fun showEditPlace(p:JSONObject){
         val content=column().apply{setPadding(dp(20),dp(12),dp(20),dp(14))}
         content.addView(label("장소 이름",15,ink));val name=textInput(p.getString("name"));content.addView(name)
         content.addView(label("메모 (선택)",15,ink));val note=textInput(p.optString("note"));content.addView(note)
         content.addView(label("위치를 바꾸려면 휴대폰 지도에서 다른 장소를 추가해 주세요.",13))
-        val form=dialog().setTitle("장소 수정").setView(content).setNegativeButton("취소",null).setPositiveButton("저장",null).create()
+        val form=placePopup().setTitle("장소 수정").setView(content).setNegativeButton("취소",null).setPositiveButton("저장",null).create()
         form.setOnShowListener{form.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{
             if(!canInteract())return@setOnClickListener
             val value=name.text.toString().trim()
@@ -934,35 +929,82 @@ class FamilyTripActivity : Activity() {
     }
     private fun showPlaceDetails(p:JSONObject){
         lateinit var detail:AlertDialog
-        val content=column().apply{setPadding(dp(18),dp(9),dp(18),dp(12))}
-        content.addView(label(p.optString("address","주소 정보 없음"),16,ink))
-        val info=p.optJSONObject("info")
-        if(info!=null){
-            if(info.optString("categoryName").isNotBlank())content.addView(label(info.getString("categoryName"),14,muted))
-            if(info.optString("phone").isNotBlank())content.addView(label("전화 ${info.getString("phone")}",16,ink))
-            val checked=runCatching{java.time.Instant.parse(info.optString("checkedAt")).atZone(java.time.ZoneId.of("Asia/Seoul")).toLocalDate().toString()}.getOrDefault("")
-            content.addView(label("카카오 검색 · $checked 확인",12,muted))
-            val url=info.optString("placeUrl")
-            if(Regex("https://place\\.map\\.kakao\\.com/\\d+").matches(url))content.addView(softButton("카카오맵에서 상세 보기 ↗"){
-                runCatching{startActivity(Intent(Intent.ACTION_VIEW,android.net.Uri.parse(url)))}.onFailure{Toast.makeText(this,"상세페이지를 열 수 있는 앱이 필요해요",Toast.LENGTH_LONG).show()}
-            })
-        }else{
-            content.addView(softButton("가게 정보 불러오기"){
-                postRoom("places",JSONObject().put("action","details").put("placeId",p.getString("id"))){result->
-                    val updated=result.getJSONArray("places");val fresh=(0 until updated.length()).map{updated.getJSONObject(it)}.find{it.optString("id")==p.getString("id")}
-                    if(fresh!=null){detail.dismiss();showPlaceDetails(fresh)}
-                }
-            })
+        val content=column().apply{setPadding(dp(22),dp(12),dp(22),dp(14))}
+        var current=p
+        var fetching=false
+        val feedback=label("",13,muted).apply{visibility=View.GONE}
+        fun date(value:String)=runCatching{java.time.Instant.parse(value).atZone(java.time.ZoneId.of("Asia/Seoul")).toLocalDate().toString()}.getOrDefault("")
+        fun section(title:String):LinearLayout{
+            content.addView(label(title,14,muted).apply{setPadding(0,dp(14),0,dp(8))})
+            return column().apply{
+                background=surface(MoagilBrand.background,14);setPadding(dp(14),dp(8),dp(14),dp(8))
+                content.addView(this,LinearLayout.LayoutParams(-1,-2))
+            }
         }
-        content.addView(label("자동 영업시간 정보는 제공되지 않아요. 카카오맵 상세페이지에서 확인해 주세요.",13,muted))
-        if(p.optString("note").isNotBlank())content.addView(label(p.getString("note"),16,ink))
-        if(p.optString("opensAt").isNotBlank())content.addView(label("운영시간 ${p.optString("opensAt")}–${p.optString("closesAt")} · 직접 입력",14))
-        content.addView(label("머무를 시간 ${p.optInt("stayMinutes",60)}분${if(p.optBoolean("mustVisit"))" · 코스에 꼭 포함" else ""}",14))
-        if(p.optBoolean("demo"))content.addView(label("연동 시험 데이터",13))
-        content.addView(softButton("이 장소 삭제"){detail.dismiss();confirmDeletePlace(p)})
-        validLocation()?.let{location->content.addView(label("직선 %.1f km · 실제 주행 거리 아님".format(distanceKm(location.latitude,location.longitude,p.getDouble("latitude"),p.getDouble("longitude"))),14,mint))}
-        detail=dialog().setTitle(p.getString("name")).setView(ScrollView(this).apply{addView(content)}).setNegativeButton("닫기",null).setNeutralButton("수정"){_,_->showEditPlace(p)}.setPositiveButton("출발 확인"){_,_->confirmRoute(p)}.create()
-        detail.setOnShowListener{detail.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled=naviReady && pending==null}
+        fun field(parent:LinearLayout,title:String,value:String){
+            if(value.isBlank())return
+            if(parent.childCount>0)separator(parent)
+            val block=column().apply{setPadding(0,dp(10),0,dp(10))}
+            block.addView(label(title,12,muted))
+            block.addView(label(value.replace(Regex("(?<=\\S)\\["),"\n["),17,ink).apply{setLineSpacing(dp(3).toFloat(),1.12f)})
+            parent.addView(block)
+        }
+        lateinit var draw:()->Unit
+        fun load(action:String){
+            if(fetching||!canInteract())return
+            if(!connected){feedback.text="연결 후 다시 확인해 주세요";feedback.visibility=View.VISIBLE;return}
+            fetching=true;feedback.text="정보를 확인하고 있어요…";feedback.visibility=View.VISIBLE
+            val generation=sessionGeneration
+            io.execute{
+                val result=runCatching{request("/api/rooms/$roomId/places",JSONObject().put("action",action).put("placeId",p.getString("id")))}
+                ui.post{
+                    if(isDestroyed||generation!=sessionGeneration)return@post
+                    fetching=false
+                    result.onSuccess{r->
+                        if(r.optInt("revision")>=revision){room=r;revision=r.optInt("revision");prefs.edit().putString("cachedRoom",r.toString()).apply();renderCards()}
+                        if(!detail.isShowing)return@onSuccess
+                        val list=room?.optJSONArray("places") ?: r.getJSONArray("places")
+                        val fresh=(0 until list.length()).map{list.getJSONObject(it)}.find{it.optString("id")==p.getString("id")}
+                        if(fresh==null){detail.dismiss();return@onSuccess}
+                        current=fresh;feedback.text="";feedback.visibility=View.GONE;draw()
+                    }.onFailure{if(detail.isShowing){feedback.text="정보를 확인하지 못했어요. 잠시 후 다시 눌러주세요.";feedback.visibility=View.VISIBLE}}
+                }
+            }
+        }
+        draw={
+            content.removeAllViews()
+            val info=current.optJSONObject("info")
+            val visit=current.optJSONObject("visitInfo")
+            val basic=section("기본 정보")
+            field(basic,"주소",current.optString("address").ifBlank{"주소 정보 없음"})
+            field(basic,"전화",info?.optString("phone") ?: "")
+            val operations=section("영업시간 · 휴일 · 요금")
+            if(visit?.optString("status")=="matched"){
+                field(operations,"영업·이용시간",visit.optString("operatingHours"))
+                field(operations,"휴일",visit.optString("restDays"))
+                field(operations,"요금",visit.optString("fees"))
+                field(operations,"메뉴",visit.optString("menu"))
+                field(operations,"입실 / 퇴실",listOf(visit.optString("checkIn"),visit.optString("checkOut")).filter{it.isNotBlank()}.joinToString(" / "))
+                if(operations.childCount==0)operations.addView(label("제공된 운영정보가 없어요",15,muted))
+                content.addView(label("한국관광공사 · ${date(visit.optString("checkedAt"))} 조회",11,muted).apply{setPadding(0,dp(7),0,0)})
+            }else{
+                operations.addView(label(if(visit==null)"아직 확인한 운영정보가 없어요" else "등록된 운영정보가 없어요",15,muted).apply{setPadding(0,dp(8),0,dp(8))})
+            }
+            if(current.optString("note").isNotBlank())field(section("메모"),"함께 남긴 메모",current.getString("note"))
+            if(current.optString("opensAt").isNotBlank())field(section("직접 확인한 시간"),"운영시간",current.optString("opensAt")+"–"+current.optString("closesAt"))
+            content.addView(feedback)
+            val checked=runCatching{java.time.Instant.parse(visit?.optString("checkedAt")).toEpochMilli()}.getOrDefault(0)
+            if(visit==null||System.currentTimeMillis()-checked>=86400000L)content.addView(softButton("운영정보 확인"){load("tourDetails")}.apply{gravity=Gravity.CENTER;background=surface(soft,12)})
+            if(info==null)content.addView(softButton("전화번호 등 기본정보 확인"){load("details")}.apply{textSize=26f})
+            content.addView(softButton("차량 내비에서 장소 찾기"){
+                if(!naviReady){Toast.makeText(this,"차량 내비 연결을 기다려 주세요",Toast.LENGTH_LONG).show();return@softButton}
+                runCatching{navi!!.requestNavigationScreen(NavigationScreenRequest.SearchPlace(current.getString("name")))}
+                    .onSuccess{detail.dismiss()}
+                    .onFailure{Toast.makeText(this,"차량 내비를 열지 못했어요. 잠시 후 다시 눌러 주세요",Toast.LENGTH_LONG).show()}
+            }.apply{gravity=Gravity.CENTER;background=surface(soft,12);minHeight=dp(64)})
+        }
+        draw()
+        detail=placePopup().setTitle(p.getString("name")).setView(content).setNegativeButton("닫기",null).create()
         detail.show()
     }
     private fun confirmDeletePlace(p:JSONObject){
@@ -973,14 +1015,13 @@ class FamilyTripActivity : Activity() {
         val stops=course?.optJSONArray("stops")
         val changesCourse=course?.optString("status")=="active"&&stops!=null&&(course.optInt("nextIndex") until stops.length()).any{stops.getJSONObject(it).optString("placeId")==id}
         val content=column().apply{setPadding(dp(20),dp(10),dp(20),dp(10))}
-        content.addView(label("이 추천 장소를 삭제할까요?",20,ink))
         content.addView(label(p.getString("name"),19,ink))
         content.addView(label("목록과 지도에서 숨겨져요. 삭제 직후 되돌리거나, 설정에서 복원할 수 있어요.",15))
         if(changesCourse)content.addView(label("저장한 코스에서도 제외돼요. 출발 전에 남은 일정을 다시 계산해 주세요.",14))
         if(ballot?.optString("status")=="open"&&candidateIds!=null&&(0 until candidateIds.length()).any{candidateIds.optString(it)==id})content.addView(label("진행 중인 투표는 중단하고, 이전 선택 기록은 보관해요.",14))
         if(ballot?.optString("status")=="closed"&&candidateIds!=null&&(0 until candidateIds.length()).any{candidateIds.optString(it)==id})content.addView(label("지난 투표 결과에는 장소 이름과 득표가 그대로 남아요.",14))
         if(room?.optString("selectedId")==id)content.addView(label("차량의 최근 선택 기록도 지웁니다. 이미 실행 중인 기본 내비 안내는 유지돼요.",14))
-        val confirm=dialog().setView(ScrollView(this).apply{addView(content)}).setNegativeButton("취소",null).setPositiveButton("삭제"){_,_->
+        val confirm=placePopup().setTitle("장소를 삭제할까요?").setView(content).setNegativeButton("취소",null).setPositiveButton("삭제"){_,_->
             postRoom("places",JSONObject().put("action","delete").put("placeId",id)){
                 undoPlaceId=id;undoPlaceName=p.getString("name");undoUntil=android.os.SystemClock.elapsedRealtime()+30000L
                 ui.removeCallbacks(expireUndo);ui.postDelayed(expireUndo,30000L);updateUndoBar()
@@ -1015,9 +1056,9 @@ class FamilyTripActivity : Activity() {
             }}.show()
     }
     private fun confirmRoute(p: JSONObject) {
-        dialog().setTitle("이 장소로 안내할까요?")
-            .setMessage("${p.getString("name")}\n${p.optString("address")}\n\n기본 내비의 현재 목적지를 이 장소로 변경합니다.")
-            .setNegativeButton("돌아가기",null).setPositiveButton("내비로 보내기") { _,_ -> sendRoute(p) }.show()
+        placePopup().setTitle("이곳으로 출발할까요?")
+            .setMessage("${p.getString("name")}\n${p.optString("address")}")
+            .setNegativeButton("취소",null).setPositiveButton("길 안내 시작") { _,_ -> sendRoute(p) }.show()
     }
     private fun sendRoute(p: JSONObject) {
         if(!canInteract())return

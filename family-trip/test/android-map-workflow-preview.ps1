@@ -1,4 +1,4 @@
-﻿$ErrorActionPreference='Stop'
+$ErrorActionPreference='Stop'
 $adb='C:/Users/hyeon/AppData/Local/Android/Sdk/platform-tools/adb.exe'
 $package='com.example.pleosstarter'
 $workspace='D:/ChatGPT/현대자동차_플레오스'
@@ -43,7 +43,8 @@ try{
  & $adb -s emulator-5554 push "$workspace/family-trip/data/qa-prefs.xml" /data/local/tmp/moagil-qa-prefs.xml | Out-Null
  & $adb -s emulator-5554 shell run-as $package --user 10 cp /data/local/tmp/moagil-qa-prefs.xml shared_prefs/family-trip.xml
  & $adb -s emulator-5554 shell am start -W -n "$package/.FamilyTripActivity" | Out-Null
- Tap-Text '장소'
+ Tap-Text '장소 선택'
+ $null=Screen-Xml
  Tap-PlaceMenu
  Tap-Text '장소 수정'
  $doc=Screen-Xml
@@ -62,12 +63,12 @@ try{
  $script:placeName='Edited-Place'
  Capture 'map-vehicle-edited.png'
  Tap-PlaceMenu
- Tap-Text '이 장소 삭제'
+ Tap-Text '장소 삭제'
  Tap-Text '취소'
  $stillPresent=Invoke-RestMethod -Uri $base -Headers $headers
  if($stillPresent.places.Count -ne 2){throw 'Cancel changed the list'}
  Tap-PlaceMenu
- Tap-Text '이 장소 삭제'
+ Tap-Text '장소 삭제'
  Capture 'map-vehicle-delete-confirm.png'
  Tap-Text '삭제'
  $doc=Screen-Xml
