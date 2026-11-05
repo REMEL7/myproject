@@ -27,7 +27,7 @@ private val accent get()=MoagilBrand.navy
 private val primary get()=MoagilBrand.ink
 
 /** App-owned sheet presentation. Retains AlertDialog's listener/getButton contract for existing flows. */
-class CupertinoSheetBuilder(private val activity:Activity,private val canAct:()->Boolean={true},private val centered:Boolean=false,private val created:(AlertDialog)->Unit={}){
+class CupertinoSheetBuilder(private val activity:Activity,private val canAct:()->Boolean={true},private val centered:Boolean=false,private val wide:Boolean=false,private val created:(AlertDialog)->Unit={}){
     private var title=""
     private var message=""
     private var view:View?=null
@@ -44,7 +44,7 @@ class CupertinoSheetBuilder(private val activity:Activity,private val canAct:()-
     fun setNeutralButton(value:String,listener:DialogInterface.OnClickListener?)=apply{actions[DialogInterface.BUTTON_NEUTRAL]=value to listener}
     fun setItems(values:Array<String>,listener:DialogInterface.OnClickListener)=apply{options=values;optionClick=listener}
     fun setSingleChoiceItems(values:Array<String>,checked:Int,listener:DialogInterface.OnClickListener)=apply{options=values;selected=checked;single=true;optionClick=listener}
-    fun create():AlertDialog=CupertinoSheet(activity,title,message,view,options,selected,single,optionClick,actions.toMap(),canAct,centered).also{created(it)}
+    fun create():AlertDialog=CupertinoSheet(activity,title,message,view,options,selected,single,optionClick,actions.toMap(),canAct,centered,wide).also{created(it)}
     fun show():AlertDialog=create().also{it.show()}
 }
 
@@ -52,14 +52,14 @@ private class CupertinoSheet(
     private val activity:Activity,private val heading:String,private val message:String,private val body:View?,
     private val options:Array<String>?,private val selected:Int,private val single:Boolean,
     private val optionClick:DialogInterface.OnClickListener?,
-    private val actions:Map<Int,Pair<String,DialogInterface.OnClickListener?>>,private val canAct:()->Boolean,private val centered:Boolean
+    private val actions:Map<Int,Pair<String,DialogInterface.OnClickListener?>>,private val canAct:()->Boolean,private val centered:Boolean,private val wide:Boolean
 ):AlertDialog(activity){
     private val controls=mutableMapOf<Int,Button>()
     private fun text(value:String,size:Float,color:Int=primary)=TextView(context).apply{
         text=value;textSize=size;setTextColor(color);includeFontPadding=false
         typeface=Typeface.create("sans-serif",Typeface.NORMAL);setLineSpacing(0f,1.16f)
     }
-    private fun actionButton(which:Int):Button{
+    private fun actionButton(which:Int,toolbar:Boolean=false):Button{
         val action=actions.getValue(which)
         return Button(context).apply{
             text=action.first;textSize=26f;isAllCaps=false;includeFontPadding=false
@@ -75,6 +75,7 @@ private class CupertinoSheet(
                 background=GradientDrawable().apply{setColor(if(emphasized)if(destructive)MoagilBrand.danger else accent else MoagilBrand.mist);cornerRadius=context.u(14).toFloat()}
                 setTextColor(if(emphasized)if(destructive&&MoagilBrand.night)MoagilBrand.background else MoagilBrand.onAccent else accent)
             }
+            if(toolbar){textSize=28f;minHeight=context.u(48);minimumHeight=context.u(48);background=ColorDrawable(Color.TRANSPARENT);setTextColor(accent)}
             setOnClickListener{if(which!=DialogInterface.BUTTON_NEGATIVE && !canAct())return@setOnClickListener;action.second?.onClick(this@CupertinoSheet,which);dismiss()}
         }.also{controls[which]=it}
     }
@@ -90,10 +91,12 @@ private class CupertinoSheet(
         if(!centered)root.addView(View(context).apply{background=GradientDrawable().apply{setColor(Color.rgb(205,207,215));cornerRadius=context.u(2).toFloat()}},
             LinearLayout.LayoutParams(context.u(34),context.u(4)).apply{gravity=Gravity.CENTER_HORIZONTAL;topMargin=context.u(8);bottomMargin=context.u(5)})
         val bar=LinearLayout(context).apply{gravity=Gravity.CENTER_VERTICAL;setPadding(context.u(7),0,context.u(7),0)}
+        if(wide&&centered&&actions.containsKey(DialogInterface.BUTTON_NEGATIVE))bar.addView(actionButton(DialogInterface.BUTTON_NEGATIVE,true),LinearLayout.LayoutParams(context.u(90),context.u(56)))
         if(!centered)actions[DialogInterface.BUTTON_NEGATIVE]?.let{bar.addView(actionButton(DialogInterface.BUTTON_NEGATIVE),LinearLayout.LayoutParams(-2,-2))}
         bar.addView(text(heading,32f).apply{
             gravity=Gravity.CENTER;typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL);maxLines=if(centered)2 else 1;ellipsize=android.text.TextUtils.TruncateAt.END
         },LinearLayout.LayoutParams(0,context.u(if(centered)64 else 52),1f))
+        if(wide&&centered&&actions.containsKey(DialogInterface.BUTTON_NEGATIVE))bar.addView(View(context),LinearLayout.LayoutParams(context.u(90),1))
         if(!centered)actions[DialogInterface.BUTTON_POSITIVE]?.let{bar.addView(actionButton(DialogInterface.BUTTON_POSITIVE),LinearLayout.LayoutParams(-2,-2))}
         root.addView(bar)
         root.addView(View(context).apply{setBackgroundColor(MoagilBrand.line)},LinearLayout.LayoutParams(-1,1))
@@ -110,15 +113,16 @@ private class CupertinoSheet(
                 setOnClickListener{if(!canAct())return@setOnClickListener;optionClick?.onClick(this@CupertinoSheet,index);if(!single)dismiss()}
             },LinearLayout.LayoutParams(-1,-2))
         }
-        val screenHeight=(activity.resources.configuration.screenHeightDp*activity.resources.displayMetrics.density).toInt()
-        val maxHeight=if(centered)minOf((screenHeight*(if(actions.size<=1).70 else .48)).toInt(),(screenHeight-context.u(110+actions.size*82)).coerceAtLeast(context.u(60))) else (screenHeight*.68).toInt()
+        val screenHeight=activity.window.decorView.height.takeIf{it>0} ?: (activity.resources.configuration.screenHeightDp*activity.resources.displayMetrics.density).toInt()
+        val footerKeys=listOf(DialogInterface.BUTTON_NEUTRAL,DialogInterface.BUTTON_POSITIVE,DialogInterface.BUTTON_NEGATIVE).filter{actions.containsKey(it)&&(!wide||it!=DialogInterface.BUTTON_NEGATIVE)}
+        val maxHeight=if(wide&&centered)(screenHeight-context.u(64+12+32+(if(footerKeys.isEmpty())0 else 22+footerKeys.size*72+(footerKeys.size-1)*10))).coerceAtLeast(context.u(80)) else if(centered)minOf((screenHeight*(if(actions.size<=1).70 else .48)).toInt(),(screenHeight-context.u(110+actions.size*82)).coerceAtLeast(context.u(60))) else (screenHeight*.68).toInt()
         val scroll=object:ScrollView(context){
             override fun onMeasure(widthSpec:Int,heightSpec:Int){super.onMeasure(widthSpec,MeasureSpec.makeMeasureSpec(maxHeight,MeasureSpec.AT_MOST))}
         }.apply{addView(content);isFillViewport=false;isVerticalScrollBarEnabled=centered;isScrollbarFadingEnabled=!centered;clipToPadding=false}
         root.addView(scroll,LinearLayout.LayoutParams(-1,-2))
-        if(centered){
+        if(centered&&footerKeys.isNotEmpty()){
             val footer=LinearLayout(context).apply{orientation=LinearLayout.VERTICAL;setPadding(context.u(20),context.u(14),context.u(20),context.u(8))}
-            listOf(DialogInterface.BUTTON_NEUTRAL,DialogInterface.BUTTON_POSITIVE,DialogInterface.BUTTON_NEGATIVE).filter{actions.containsKey(it)}.forEachIndexed{i,key->
+            footerKeys.forEachIndexed{i,key->
                 footer.addView(actionButton(key),LinearLayout.LayoutParams(-1,context.u(72)).apply{if(i>0)topMargin=context.u(10)})
             }
             root.addView(footer)
@@ -127,14 +131,14 @@ private class CupertinoSheet(
         setContentView(root);root.requestFocus()
         window?.apply{
             setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT));decorView.setPadding(0,0,0,0)
-            addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);setDimAmount(.18f);setWindowAnimations(0)
+            addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);setDimAmount(if(wide).46f else .18f);setWindowAnimations(0)
             setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
         }
         if(!centered&&android.animation.ValueAnimator.areAnimatorsEnabled()){
             root.translationY=context.u(18).toFloat();root.animate().translationY(0f).setDuration(200).start()
         }
     }
-    override fun onStart(){super.onStart();window?.setGravity(if(centered)Gravity.CENTER else Gravity.BOTTOM);val width=if(centered)minOf(context.u(600),(activity.resources.configuration.screenWidthDp*activity.resources.displayMetrics.density).toInt()-context.u(32)) else ViewGroup.LayoutParams.MATCH_PARENT;window?.setLayout(width,ViewGroup.LayoutParams.WRAP_CONTENT)}
+    override fun onStart(){super.onStart();window?.setGravity(if(centered)Gravity.CENTER else Gravity.BOTTOM);val width=if(centered)minOf(context.u(if(wide)760 else 600),(activity.resources.configuration.screenWidthDp*activity.resources.displayMetrics.density).toInt()-context.u(32)) else ViewGroup.LayoutParams.MATCH_PARENT;window?.setLayout(width,ViewGroup.LayoutParams.WRAP_CONTENT)}
     override fun getButton(whichButton:Int):Button=controls[whichButton] ?: super.getButton(whichButton)
 }
 

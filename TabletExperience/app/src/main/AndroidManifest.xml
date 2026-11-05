@@ -1,0 +1,11 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <queries><intent><action android:name="android.intent.action.VIEW" /><data android:scheme="geo" /></intent></queries>
+    <application android:allowBackup="false" android:label="GMG 체험" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:usesCleartextTraffic="true" android:supportsRtl="true" android:theme="@android:style/Theme.Material.NoActionBar">
+        <activity android:name=".TabletConnectActivity" android:exported="false" />
+        <activity android:name=".FamilyTripActivity" android:exported="true" android:resizeableActivity="true" android:configChanges="screenSize|smallestScreenSize|orientation|screenLayout">
+            <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
+        </activity>
+    </application>
+</manifest>

@@ -66,6 +66,7 @@ class FamilyTripActivity : Activity() {
     private val tabButtons = mutableMapOf<String,Button>()
     private val tabIcons = mutableMapOf<String,CupertinoTabIcon>()
     private var roadRoutingEnabled = false
+    private var parkingEnabled = false
     private var categoryFilter = "all"
     private var sortMode = "recent"
     private var connected = false
@@ -355,6 +356,7 @@ class FamilyTripActivity : Activity() {
         group("도움말과 관리",listOf(
             Triple("기본 내비 열기","플레오스 내비게이션으로 이동해요",{openNavigation()}),
             Triple("사용 방법","연결부터 출발까지",{showHowTo()}),
+            Triple("데이터 출처와 이용안내","제공기관·원문·라이선스",{showSources()}),
             Triple("개인정보·모임 관리","초대 링크와 모임 데이터를 관리해요",{showPrivacy()}),
             Triple("연결 설정","서버 주소와 음성 연동 상태",{showSettings()})
         ))
@@ -464,7 +466,7 @@ class FamilyTripActivity : Activity() {
         content.addView(label("진행 중인 비밀투표 결과는 알려주지 않아요. 코스 이어가기는 화면을 열며, 출발은 직접 확인해 주세요.",14))
         dialog().setView(ScrollView(this).apply{addView(content)}).setPositiveButton("확인",null).show()
     }
-    private fun postRoom(action:String,data:JSONObject,done:(JSONObject)->Unit={}){
+    private fun postRoom(action:String,data:JSONObject,failed:()->Unit={},done:(JSONObject)->Unit={}){
         if(!canInteract())return
         if(loading||pending!=null){Toast.makeText(this,"연결 또는 안내 요청이 끝난 뒤 다시 시도해 주세요",Toast.LENGTH_SHORT).show();return}
         if(!connected){Toast.makeText(this,"모임 서버 연결을 확인해 주세요",Toast.LENGTH_SHORT).show();return}
@@ -481,7 +483,7 @@ class FamilyTripActivity : Activity() {
                     room=result;revision=result.getInt("revision");prefs.edit().putString("cachedRoom",result.toString()).apply()
                     loading=false;refreshStatus();renderCards();done(result)
                 }
-            }catch(e:Exception){ui.post{if(!isDestroyed && requestGeneration==sessionGeneration){refreshStatus();Toast.makeText(this,e.message ?: "저장하지 못했어요",Toast.LENGTH_LONG).show()}}}
+            }catch(e:Exception){ui.post{if(!isDestroyed && requestGeneration==sessionGeneration){refreshStatus();failed();Toast.makeText(this,e.message ?: "저장하지 못했어요",Toast.LENGTH_LONG).show()}}}
             finally{ui.post{if(requestGeneration==sessionGeneration)loading=false}}
         }
     }
@@ -511,62 +513,286 @@ class FamilyTripActivity : Activity() {
         }.show()
     }
     private fun showPlanForm(remaining:Boolean=false){
+        if(!canInteract())return
         runCatching{navi?.getCurrentLocationInfo()}
-        val content=column().apply{setPadding(dp(18),dp(10),dp(18),dp(12))}
-        content.addView(label("출발할 곳을 고르고 코스를 비교해 보세요.",15))
-        val location=validLocation()
-        val lat=textInput(location?.latitude?.toString() ?: "","위도",true)
-        val lon=textInput(location?.longitude?.toString() ?: "","경도",true)
-        val originTitle=label(if(location!=null)"현재 위치" else "출발할 곳을 선택하세요",18,ink)
-        content.addView(originTitle)
-        content.addView(softButton("출발 위치 바꾸기"){
-            val locations=mutableListOf<Pair<String,Pair<Double,Double>>>()
-            validLocation()?.let{locations.add("현재 위치" to (it.latitude to it.longitude))}
-            val places=room?.optJSONArray("places")
-            for(i in 0 until (places?.length() ?: 0)){
-                val p=places!!.getJSONObject(i)
-                if(!p.optBoolean("demo"))locations.add(p.getString("name") to (p.getDouble("latitude") to p.getDouble("longitude")))
+        val list=room?.optJSONArray("places") ?: return
+        val places=(0 until list.length()).map{list.getJSONObject(it)}.filter{!it.optBoolean("demo")}
+        if(places.isEmpty()){Toast.makeText(this,"장소 선택에서 가고 싶은 곳을 먼저 추가해 주세요.",Toast.LENGTH_LONG).show();return}
+        val selected=linkedSetOf<String>()
+        val parking=mutableMapOf<String,JSONObject>()
+        val course=room?.optJSONObject("course")
+        val completed=mutableSetOf<String>()
+        if(remaining&&course!=null){
+            val stops=course.getJSONArray("stops");val next=course.optInt("nextIndex")
+            for(i in 0 until stops.length()){
+                val stop=stops.getJSONObject(i);val id=stop.getString("placeId")
+                if(i<next){completed.add(id);continue}
+                if(places.none{it.getString("id")==id})continue
+                selected.add(id)
+                stop.optJSONObject("parking")?.takeIf{it.optString("mode")=="selected"}?.let{
+                    parking[id]=JSONObject(it.toString()).put("parkingId",it.getString("id"))
+                }
             }
-            if(locations.isEmpty()){Toast.makeText(this,"위치를 확인하고 있어요. 잠시 후 다시 눌러주세요.",Toast.LENGTH_LONG).show()}
-            else dialog().setTitle("어디서 출발하나요?").setItems(locations.map{it.first}.toTypedArray()){_,which->
-                val choice=locations[which];lat.setText(choice.second.first.toString());lon.setText(choice.second.second.toString());originTitle.text=choice.first
-            }.setNegativeButton("취소",null).show()
-        })
-        val formatter=java.time.format.DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm")
-        val start=textInput(java.time.LocalDateTime.now(java.time.ZoneId.of("Asia/Seoul")).format(formatter))
-        content.addView(label("지금 출발 · 출발 시간은 세부 설정에서 바꿀 수 있어요.",14))
-        val places=room?.optJSONArray("places")
-        val realCount=(0 until (places?.length() ?: 0)).count{!places!!.getJSONObject(it).optBoolean("demo")}
-        val count=textInput(minOf(3,realCount).coerceAtLeast(1).toString(),number=true)
-        val estimate=textInput("20",number=true)
-        if(!remaining){
-            content.addView(label("몇 곳까지 들를까요?",18,ink))
-            val presets=LinearLayout(this)
-            for(n in 1..realCount.coerceIn(1,5))presets.addView(softButton("${n}곳"){count.setText(n.toString());for(j in 0 until presets.childCount){val b=presets.getChildAt(j) as Button;b.background=surface(if(j+1==n)soft else Color.TRANSPARENT,10)}}.apply{background=surface(if(n==count.text.toString().toInt())soft else Color.TRANSPARENT,10)},LinearLayout.LayoutParams(0,dp(48),1f))
-            content.addView(presets)
         }
-        content.addView(label(if(roadRoutingEnabled)"도로 예상시간과 입력한 영업시간을 참고해요." else "이동 시간은 직접 정한 예상값으로 계산해요.",14))
-        val advanced=column().apply{visibility=View.GONE}
-        content.addView(softButton("세부 설정 보기"){
-            advanced.visibility=if(advanced.visibility==View.VISIBLE)View.GONE else View.VISIBLE
-        })
-        advanced.addView(label("출발 시간 (예: 2026-10-27 10:00)",14));advanced.addView(start)
-        advanced.addView(label("출발 좌표 직접 입력",14));advanced.addView(lat);advanced.addView(lon)
-        if(!remaining){advanced.addView(label("최대 방문 수 (1~5)",14));advanced.addView(count)}
-        advanced.addView(label("도로시간을 못 받을 때 사용할 구간당 이동시간 (분)",14));advanced.addView(estimate)
-        content.addView(advanced)
-        val form=dialog().setTitle(if(remaining)"남은 코스 다시 짜기" else "여행 코스 만들기").setView(content).setNegativeButton("취소",null).setPositiveButton("코스 비교",null).create()
-        form.setOnShowListener{form.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{
-            if(!canInteract())return@setOnClickListener
-            val latitude=lat.text.toString().toDoubleOrNull();val longitude=lon.text.toString().toDoubleOrNull()
-            if(latitude==null||longitude==null||latitude !in -90.0..90.0||longitude !in -180.0..180.0){Toast.makeText(this,"출발할 곳을 먼저 선택해 주세요.",Toast.LENGTH_LONG).show();return@setOnClickListener}
-            val max=count.text.toString().toIntOrNull();val assumed=estimate.text.toString().toIntOrNull()
-            val date=runCatching{java.time.LocalDateTime.parse(start.text.toString().trim(),formatter.withResolverStyle(java.time.format.ResolverStyle.STRICT)).atZone(java.time.ZoneId.of("Asia/Seoul")).toInstant().toString()}.getOrNull()
-            if(max==null||max !in 1..5||assumed==null||assumed !in 1..240||date==null){Toast.makeText(this,"세부 설정의 시간과 방문 수를 확인해 주세요.",Toast.LENGTH_LONG).show();return@setOnClickListener}
-            postRoom("plan",JSONObject().put("origin",JSONObject().put("latitude",latitude).put("longitude",longitude)).put("startAt",date).put("maxStops",max).put("assumedMinutes",assumed).put("remainingOnly",remaining)){form.dismiss()}
-        }}
-        form.show()
+        val available=places.filter{!completed.contains(it.getString("id"))}
+        var origin=validLocation()?.let{JSONObject().put("latitude",it.latitude).put("longitude",it.longitude).put("name","현재 위치")}
+        var editor:AlertDialog?=null
+        lateinit var choosePlaces:()->Unit
+        lateinit var chooseParking:()->Unit
+        fun open(title:String,body:LinearLayout,next:String,onNext:()->Unit,back:String="취소",onBack:()->Unit={}){
+            editor?.dismiss()
+            val form=coursePopup().setTitle(title).setView(body).setNegativeButton(back){_,_->onBack()}.setPositiveButton(next,null).create()
+            editor=form;form.show();form.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{if(canInteract())onNext()}
+        }
+        fun pickOrigin(){
+            editor?.dismiss()
+            val content=courseColumn()
+            val options=mutableListOf<Pair<String,JSONObject>>()
+            validLocation()?.let{options.add("현재 위치" to JSONObject().put("latitude",it.latitude).put("longitude",it.longitude).put("name","현재 위치"))}
+            places.forEach{p->options.add(p.getString("name") to JSONObject().put("latitude",p.getDouble("latitude")).put("longitude",p.getDouble("longitude")).put("name",p.getString("name")))}
+            lateinit var popup:AlertDialog
+            content.addView(label("어디서 출발하나요?",20,ink))
+            options.forEach{(name,point)->content.addView(choiceRow(name,if(name=="현재 위치")"차량에서 받은 위치" else "저장한 장소",action={origin=point;popup.dismiss();chooseParking()}).apply{minimumHeight=dp(72)})}
+            popup=coursePopup().setTitle("출발지 선택").setView(content).setNegativeButton("뒤로"){_,_->chooseParking()}.create();popup.show()
+        }
+        choosePlaces={
+            val body=courseColumn().apply{setPadding(dp(22),dp(8),dp(22),dp(10))}
+            val count=label("${selected.size}곳 선택 · 최대 5곳",18,mint)
+            body.addView(count)
+            val rows=column();body.addView(rows)
+            available.forEach{p->
+                val id=p.getString("id")
+                lateinit var row:LinearLayout
+                fun draw(){
+                    row.removeAllViews()
+                    val text=column();text.addView(label(p.getString("name"),19,ink));text.addView(label(p.optString("address"),13,muted))
+                    row.addView(text,LinearLayout.LayoutParams(0,-2,1f))
+                    row.addView(label(if(selected.contains(id))"✓" else "+",24,mint))
+                    row.background=surface(if(selected.contains(id))soft else MoagilBrand.background,14)
+                }
+                row=LinearLayout(this).apply{gravity=Gravity.CENTER_VERTICAL;minimumHeight=dp(72);setPadding(dp(16),dp(10),dp(16),dp(10));isClickable=true;isFocusable=true;contentDescription="코스 장소 선택 ${p.getString("name")}";setOnClickListener{
+                    if(!canInteract())return@setOnClickListener
+                    if(selected.contains(id)){selected.remove(id);parking.remove(id)}else if(selected.size<5)selected.add(id)else{Toast.makeText(this@FamilyTripActivity,"한 코스에 최대 5곳까지 선택할 수 있어요.",Toast.LENGTH_SHORT).show();return@setOnClickListener}
+                    count.text="${selected.size}곳 선택 · 최대 5곳";draw()
+                }}
+                draw();rows.addView(row,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(8)})
+            }
+            open("1 · 장소 선택",body,"주차 선택",{
+                if(selected.isEmpty())Toast.makeText(this,"장소를 한 곳 이상 선택해 주세요.",Toast.LENGTH_SHORT).show() else chooseParking()
+            })
+        }
+        chooseParking={
+            val body=courseColumn()
+            body.addView(choiceRow("출발 · ${origin?.optString("name") ?: "출발지 선택"}","지금 출발",action={pickOrigin()}).apply{background=surface(soft,14);setPadding(dp(16),dp(8),dp(16),dp(8))})
+            body.addView(label("${parkingVehicleLabel(currentParkingVehicle().optString("type"))} 기준 · 주차장을 지정하지 않아도 돼요.",15,muted).apply{setPadding(0,dp(14),0,dp(8))})
+            selected.forEachIndexed{i,id->
+                val p=available.first{it.getString("id")==id};val chosen=parking[id]
+                val priorVehicle=chosen?.optJSONObject("vehicle");val currentVehicle=currentParkingVehicle()
+                val sameVehicle=priorVehicle?.optString("type")==currentVehicle.optString("type")&&priorVehicle?.optBoolean("diesel")==currentVehicle.optBoolean("diesel")
+                val detail=if(chosen==null)"주차장 지정 안 함" else "${chosen.optString("name")} · ${chosen.optInt("minutes",60)}분 "+if(sameVehicle)parkingFeeLabel(chosen)else "요금 다시 계산 예정"
+                body.addView(choiceRow("${i+1}. ${p.getString("name")}",detail,action={
+                    editor?.dismiss();showCourseParkingPicker(p,chosen,{choice->if(choice==null)parking.remove(id)else parking[id]=choice;chooseParking()},{chooseParking()})
+                }).apply{minimumHeight=dp(80)})
+                separator(body)
+            }
+            if(!parkingEnabled)body.addView(label("주차정보 연결을 준비하고 있어요. 주차장을 지정하지 않고 코스를 만들 수 있어요.",13,muted))
+            open("2 · 주차 선택",body,"코스 비교하기",{
+                val point=origin
+                if(point==null){Toast.makeText(this,"출발지를 먼저 선택해 주세요.",Toast.LENGTH_SHORT).show();return@open}
+                if(loading||pending!=null){Toast.makeText(this,"이전 요청을 확인하고 있어요. 잠시 후 다시 눌러 주세요.",Toast.LENGTH_SHORT).show();return@open}
+                if(!connected){Toast.makeText(this,"모임 서버 연결을 확인해 주세요.",Toast.LENGTH_SHORT).show();return@open}
+                val choices=JSONObject()
+                selected.forEach{id->parking[id]?.let{choices.put(id,JSONObject().put("parkingId",it.getString("parkingId")).put("minutes",it.optInt("minutes",60)))} }
+                val shown=editor
+                shown?.getButton(AlertDialog.BUTTON_POSITIVE)?.apply{text="코스 비교 중…";isEnabled=false}
+                postRoom("plan",JSONObject().put("placeIds",org.json.JSONArray(selected.toList())).put("parkingSelections",choices).put("vehicle",currentParkingVehicle()).put("origin",point).put("startAt",java.time.Instant.now().toString()).put("assumedMinutes",20).put("remainingOnly",remaining),failed={shown?.getButton(AlertDialog.BUTTON_POSITIVE)?.apply{text="코스 비교하기";isEnabled=true}}){
+                    if(shown?.isShowing==true){shown.dismiss();showCourseComparison(it)}
+                }
+            },"이전",{choosePlaces()})
+        }
+        choosePlaces()
     }
+    private fun courseColumn()=column().apply{setPadding(dp(22),dp(12),dp(22),dp(16))}
+    private fun coursePopup()=CupertinoSheetBuilder(this,{canInteract()},centered=true,wide=true){sheets.removeAll{old->!old.isShowing};sheets.add(it)}
+    private fun money(value:Double)=java.text.NumberFormat.getNumberInstance(java.util.Locale.KOREA).format(value)+"원"
+    private fun parkingFeeLabel(p:JSONObject)=if(p.isNull("estimatedFee"))"요금 미제공" else money(p.optDouble("estimatedFee"))+" 예상"
+    private fun parkingSummaryText(plan:JSONObject):String{
+        val p=plan.optJSONObject("parkingSummary") ?: return "주차장 지정 없음"
+        if(p.optInt("selectedCount")==0)return "주차장 지정 없음"
+        val amount=money(p.optDouble("knownTotal"))
+        return if(p.optInt("unknownCount")>0)"확인된 주차요금 $amount · ${p.optInt("unknownCount")}곳 요금 미제공" else "예상 주차요금 $amount"
+    }
+    private fun courseTravelText(plan:JSONObject)=if(plan.optString("timingSource")=="kakao-road")"도로 ${plan.optDouble("roadDistanceKm")}km · 이동 약 ${plan.optInt("roadMinutes")}분" else "직선 ${plan.optDouble("straightKm")}km · 도로시간 확인 필요"
+    private fun currentParkingVehicle()=JSONObject().put("type",prefs.getString("parkingVehicleType","standard")).put("diesel",prefs.getBoolean("parkingDiesel",false))
+    private fun parkingVehicleLabel(type:String)=when(type){"compact"->"경차";"low1"->"저공해 1종";"low2"->"저공해 2종";"low3"->"저공해 3종";else->"일반 승용차"}
+    private fun showCourseParkingPicker(place:JSONObject,initial:JSONObject?,picked:(JSONObject?)->Unit,back:()->Unit){
+        if(!canInteract())return
+        val body=courseColumn()
+        var minutes=initial?.optInt("minutes",60) ?: 60
+        var vehicleType=currentParkingVehicle().optString("type","standard")
+        var diesel=currentParkingVehicle().optBoolean("diesel")
+        var appliedMinutes=minutes;var appliedType=vehicleType;var appliedDiesel=diesel
+        var sort="distance";var chosen=initial?.optString("parkingId")
+        var data:JSONObject?=null;var busy=false;var page="list";var detail:JSONObject?=null;var showMore=false
+        val generation=sessionGeneration
+        lateinit var popup:AlertDialog
+        lateinit var draw:()->Unit
+        fun profile()=JSONObject().put("type",vehicleType).put("diesel",diesel)
+        fun commit(p:JSONObject?){popup.dismiss();picked(p?.let{JSONObject(it.toString()).put("parkingId",it.getString("id")).put("minutes",minutes)})}
+        fun query(){
+            if(busy||!parkingEnabled)return
+            busy=true;draw()
+            val requestedMinutes=minutes;val vehicle=profile()
+            io.execute{
+                val response=runCatching{request("/api/rooms/$roomId/parking",JSONObject().put("placeId",place.getString("id")).put("minutes",requestedMinutes).put("vehicle",vehicle))}
+                ui.post{
+                    if(isDestroyed||generation!=sessionGeneration||!popup.isShowing)return@post
+                    busy=false;data=response.getOrElse{JSONObject().put("status","error").put("message","주차정보를 불러오지 못했어요.")};draw()
+                }
+            }
+        }
+        fun note(value:String){if(value.isNotBlank())body.addView(label(value,13,muted).apply{setPadding(0,dp(4),0,dp(8))})}
+        draw={
+            body.removeAllViews()
+            val primary=popup.getButton(AlertDialog.BUTTON_POSITIVE)
+            primary.isEnabled=!busy
+            if(page=="conditions"){
+                primary.text="조건 적용"
+                body.addView(label("예상요금 비교 시간",18,ink))
+                val times=LinearLayout(this)
+                listOf("30분" to 30,"1시간" to 60,"2시간" to 120).forEach{(name,value)->times.addView(softButton(name){minutes=value;draw()}.apply{background=surface(if(minutes==value)soft else Color.TRANSPARENT,10)},LinearLayout.LayoutParams(0,dp(52),1f).apply{rightMargin=dp(8)})}
+                body.addView(times,LinearLayout.LayoutParams(-1,-2).apply{bottomMargin=dp(16)})
+                body.addView(label("차량 종류",18,ink))
+                listOf("standard","compact","low1","low2","low3").forEach{type->
+                    body.addView(choiceRow(parkingVehicleLabel(type),selected=vehicleType==type,action={vehicleType=type;if(type!in listOf("low2","low3"))diesel=false;draw()}).apply{minimumHeight=dp(54)})
+                    separator(body)
+                }
+                if(vehicleType in listOf("low2","low3"))body.addView(CupertinoToggle(this).apply{text="경유차예요";textSize=28f;setTextColor(ink);isChecked=diesel;setOnCheckedChangeListener{_,checked->diesel=checked}})
+                note("증빙이 필요한 감면은 현장에서 자격 확인이 필요해요.")
+            }else if(page=="detail"&&detail!=null){
+                val p=detail!!;primary.text="이 주차장 선택"
+                body.addView(label(p.getString("name"),24,ink))
+                body.addView(label("${minutes}분 · ${parkingVehicleLabel(vehicleType)}",15,muted))
+                body.addView(label(parkingFeeLabel(p),26,mint).apply{setPadding(0,dp(10),0,dp(12))})
+                if(p.optString("discountStatus")=="estimated")note("기본 ${money(p.optDouble("baseEstimatedFee"))} → ${p.optInt("discountPercent")}% 감면 예상")
+                else if(vehicleType!="standard")note(if(p.optString("discountStatus")=="not_eligible")"선택한 차량 조건에는 이 감면이 적용되지 않아요." else "이 주차장의 할인 조건은 확인이 필요해요.")
+                note("장소까지 직선 ${p.optInt("distanceMeters")}m · ${p.optString("address")}")
+                val relation=p.optString("relation")
+                if(relation=="facility")note("공식 안내에서 확인한 시설 부설주차장이에요.")
+                else if(relation=="facility_candidate")note("시설명으로 찾은 후보예요. 전용·제휴 여부는 확인해 주세요.")
+                val weekday=p.optString("weekday");val saturday=p.optString("saturday");val holiday=p.optString("holiday")
+                if(weekday.isNotBlank()&&weekday!="–"&&weekday==saturday&&weekday==holiday)note("매일 $weekday")
+                else listOf("평일" to weekday,"토요일" to saturday,"공휴일" to holiday).forEach{(name,value)->if(value.isNotBlank()&&value!="–")note("$name $value")}
+                note("자료: ${p.optString("provider")}")
+                body.addView(softButton(if(showMore)"요금 조건·출처 접기  ⌃" else "요금 조건·출처 보기  ⌄"){showMore=!showMore;draw()})
+                if(showMore){
+                    note(p.optString("notes"));note(p.optString("discountConditions"))
+                    note("자료 기준: ${p.optString("referenceDate").ifBlank{"요금 미제공"}}")
+                    body.addView(label("원문: ${p.optString("sourceUrl")}",11,muted))
+                    if(p.optString("discountSourceUrl").isNotBlank()&&p.optString("discountSourceUrl")!=p.optString("sourceUrl"))body.addView(label("감면 근거: ${p.optString("discountSourceUrl")}",11,muted))
+                }
+            }else{
+                primary.text=if(chosen==null)"주차장 지정 없이 진행" else "현재 선택 유지"
+                val controls=LinearLayout(this).apply{gravity=Gravity.CENTER_VERTICAL}
+                controls.addView(softButton("${minutes}분 · ${parkingVehicleLabel(vehicleType)}  ›"){
+                    if(!busy){appliedMinutes=minutes;appliedType=vehicleType;appliedDiesel=diesel;page="conditions";draw()}
+                },LinearLayout.LayoutParams(0,dp(52),1f))
+                controls.addView(softButton(if(sort=="distance")"거리순 ▾" else "요금순 ▾"){sort=if(sort=="distance")"price" else "distance";draw()},LinearLayout.LayoutParams(dp(130),dp(52)))
+                body.addView(controls)
+                if(chosen!=null)body.addView(softButton("주차장 지정 해제"){chosen=null;draw()})
+                if(busy)note("시설 주차장과 주변 주차장을 찾고 있어요…")
+                else if(data?.optString("status")=="ready"){
+                    val array=data!!.getJSONArray("items");val all=(0 until array.length()).map{array.getJSONObject(it)}
+                    val facility=data!!.optJSONObject("facilityParking")
+                    if(facility?.optString("status") in listOf("none","unknown"))note(facility!!.optString("message"))
+                    val facilityInfo=data!!.optJSONObject("facilityInfo")
+                    if(facility?.optString("status")!="none"&&facilityInfo!=null)note("시설 안내: ${facilityInfo.optString("text")} · ${facilityInfo.optString("provider")}")
+                    if(facility?.optString("sourceUrl")?.isNotBlank()==true)body.addView(softButton("시설 주차 안내 원문"){
+                        runCatching{startActivity(Intent(Intent.ACTION_VIEW,android.net.Uri.parse(facility.getString("sourceUrl"))))}
+                    })
+                    for(facility in listOf(true,false)){
+                        var items=all.filter{(it.optString("relation")!="nearby")==facility}
+                        if(sort=="price")items=items.sortedWith(compareBy<JSONObject>{if(it.isNull("estimatedFee"))Double.POSITIVE_INFINITY else it.getDouble("estimatedFee")}.thenBy{it.optInt("distanceMeters")})
+                        if(items.isEmpty())continue
+                        body.addView(label(if(facility)"시설 주차장 · 후보" else "주변 주차장",15,muted).apply{setPadding(0,dp(14),0,dp(6))})
+                        items.forEach{p->
+                            val row=LinearLayout(this).apply{gravity=Gravity.CENTER_VERTICAL;setPadding(dp(12),dp(12),dp(12),dp(12));minimumHeight=dp(82);background=surface(if(p.getString("id")==chosen)soft else Color.TRANSPARENT,12);isClickable=true;isFocusable=true;contentDescription="주차장 선택 ${p.getString("name")}";setOnClickListener{if(canInteract()){detail=p;showMore=false;page="detail";draw()}}}
+                            val copy=column();copy.addView(label((if(p.getString("id")==chosen)"✓ " else "")+p.getString("name"),19,ink))
+                            copy.addView(label("직선 ${p.optInt("distanceMeters")}m · "+when(p.optString("relation")){"facility"->"부설 확인";"facility_candidate"->"시설명 일치";else->"주변"},12,muted))
+                            row.addView(copy,LinearLayout.LayoutParams(0,-2,1f))
+                            val price=column().apply{gravity=Gravity.END}
+                            price.addView(label(if(p.isNull("estimatedFee"))"요금 미확인" else money(p.optDouble("estimatedFee")),18,if(p.isNull("estimatedFee"))muted else mint).apply{gravity=Gravity.END})
+                            if(p.optString("discountStatus")=="estimated")price.addView(label("${p.optInt("discountPercent")}% 감면 예상",11,muted).apply{gravity=Gravity.END})
+                            else if(vehicleType!="standard")price.addView(label(if(p.optString("discountStatus")=="not_eligible")"감면 제외" else "할인 확인 필요",11,muted).apply{gravity=Gravity.END})
+                            row.addView(price,LinearLayout.LayoutParams(dp(130),-2).apply{leftMargin=dp(12)})
+                            body.addView(row);separator(body)
+                        }
+                    }
+                    if(all.isEmpty())note("주차장을 찾지 못했어요. 시설 안내를 확인해 주세요.")
+                    if(data!!.optBoolean("searchIncomplete"))note("일부 자료를 불러오지 못했어요.")
+                    body.addView(label("직선거리·등록 정보 기준 · 실시간 빈자리 미제공",11,muted))
+                }else{
+                    note(if(!parkingEnabled)"주차정보 연결을 준비하고 있어요." else data?.optString("message") ?: "주차정보를 불러와 주세요.")
+                    if(parkingEnabled)body.addView(softButton("다시 불러오기"){query()})
+                }
+            }
+        }
+        popup=coursePopup().setTitle("${place.getString("name")} · 주차장").setView(body).setNegativeButton("뒤로",null).setPositiveButton("주차장 지정 없이 진행",null).create();popup.show()
+        popup.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener{
+            if(page=="conditions"){minutes=appliedMinutes;vehicleType=appliedType;diesel=appliedDiesel;page="list";draw()}
+            else if(page=="detail"){page="list";draw()}else{popup.dismiss();back()}
+        }
+        popup.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{
+            if(!canInteract()||busy)return@setOnClickListener
+            if(page=="conditions"){
+                prefs.edit().putString("parkingVehicleType",vehicleType).putBoolean("parkingDiesel",diesel).apply();page="list";data=null;detail=null;query()
+            }else if(page=="detail")commit(detail)
+            else if(chosen==null)commit(null)
+            else{
+                val rows=data?.optJSONArray("items");val p=(0 until (rows?.length() ?: 0)).map{rows!!.getJSONObject(it)}.find{it.getString("id")==chosen}
+                if(p==null)Toast.makeText(this,"주차정보를 다시 확인해 주세요.",Toast.LENGTH_SHORT).show() else commit(p)
+            }
+        }
+        draw();query()
+    }
+
+    private fun showCourseComparison(r:JSONObject){
+        val plans=r.optJSONArray("plans") ?: return
+        if(plans.length()==0)return
+        var selected=0
+        val content=courseColumn()
+        lateinit var popup:AlertDialog
+        fun draw(){
+            content.removeAllViews()
+            content.addView(label("3 · 코스 확인",17,mint))
+            val options=LinearLayout(this).apply{orientation=if(slimScreen)LinearLayout.VERTICAL else LinearLayout.HORIZONTAL};content.addView(options)
+            for(i in 0 until plans.length()){
+                val plan=plans.getJSONObject(i)
+                options.addView(choiceRow(plan.getString("title"),courseTravelText(plan)+"\n"+parkingSummaryText(plan),selected=i==selected,action={selected=i;draw()}).apply{background=surface(if(i==selected)soft else MoagilBrand.background,14);setPadding(dp(16),dp(10),dp(16),dp(10));minimumHeight=dp(94)},if(slimScreen)LinearLayout.LayoutParams(-1,-2).apply{bottomMargin=dp(8)}else LinearLayout.LayoutParams(0,-2,1f).apply{if(i>0)leftMargin=dp(8)})
+            }
+            val plan=plans.getJSONObject(selected);val stops=plan.getJSONArray("stops")
+            plan.optJSONObject("vehicle")?.let{content.addView(label(parkingVehicleLabel(it.optString("type"))+(if(it.optBoolean("diesel"))" · 경유" else "")+" 기준 예상요금",13,muted))}
+            content.addView(label(plan.getString("reason"),14,muted).apply{setPadding(0,dp(12),0,dp(8))})
+            for(i in 0 until stops.length()){
+                val stop=stops.getJSONObject(i);content.addView(label("${i+1}. ${stop.getString("name")}",18,ink))
+                val parking=stop.optJSONObject("parking")
+                content.addView(label(if(parking?.optString("mode")=="selected")"주차 · ${parking.optString("name")} · ${parking.optInt("minutes")}분 ${parkingFeeLabel(parking)}" else "주차장 지정 안 함",13,muted))
+            }
+            val notes=plan.optJSONArray("warnings");val detail=column().apply{visibility=View.GONE}
+            if(notes!=null)for(i in 0 until notes.length())detail.addView(label(notes.getString(i),12,muted))
+            if(plan.optString("sequenceSource")!="kakao-road-matrix")content.addView(label("도로 구간 전체를 비교하지 못해 직선 동선으로 순서를 정했어요.",12,MoagilBrand.warning))
+            content.addView(softButton("계산 기준 보기"){detail.visibility=if(detail.visibility==View.VISIBLE)View.GONE else View.VISIBLE})
+            content.addView(detail)
+        }
+        popup=coursePopup().setTitle("어떤 코스로 갈까요?").setView(content).setNegativeButton("닫기",null).setPositiveButton("이 코스 저장",null).create();popup.show();draw()
+        popup.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{
+            if(!canInteract())return@setOnClickListener
+            val plan=plans.getJSONObject(selected)
+            if(plan.optInt("violations")>0){Toast.makeText(this,"입력한 운영시간과 맞지 않아요. 장소의 방문 조건을 확인해 주세요.",Toast.LENGTH_LONG).show();return@setOnClickListener}
+            postRoom("course",JSONObject().put("action","choose").put("planId",plan.getString("id"))){popup.dismiss()}
+        }
+    }
+
     private fun featureCard(title:String,description:String=""):LinearLayout{
         val view=column().apply{setPadding(dp(16),dp(13),dp(16),dp(13));background=surface(MoagilBrand.surface,17)}
         view.addView(label(title,18,ink).apply{typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL)})
@@ -578,80 +804,66 @@ class FamilyTripActivity : Activity() {
     private fun renderCoursePane(r:JSONObject){
         val course=r.optJSONObject("course")
         if(course!=null){
-            val stops=course.getJSONArray("stops");val index=course.optInt("nextIndex")
-            val needsReplan=course.optBoolean("needsReplan")&&index<stops.length()
-            val pane=featureCard(if(course.optString("status")=="cancelled")"저장한 코스를 비웠어요" else if(index<stops.length())"저장한 코스 이어가기" else "모든 방문을 마쳤어요 ✓","${course.getString("title")} · ${index}/${stops.length()}곳 진행")
-            pane.addView(label(if(needsReplan)"장소가 바뀌었어요. 이동시간을 다시 계산해 주세요." else if(course.optString("timingSource")=="kakao-road")"조회 당시 도로 예상시간 기준" else "직접 설정한 임시 이동시간 기준 · 실제 도로시간 아님",12,if(needsReplan)MoagilBrand.warning else mint))
-            if(index<stops.length()){
+            val stops=course.getJSONArray("stops");val index=course.optInt("nextIndex");val ongoing=index<stops.length()&&course.optString("status")!="cancelled"
+            val pane=featureCard(if(ongoing)"저장한 코스" else "지난 코스",courseTravelText(course)+" · "+parkingSummaryText(course))
+            if(ongoing){
                 val next=stops.getJSONObject(index)
-                pane.addView(label("다음 · ${next.getString("name")}",24,ink))
-                if(!needsReplan)pane.addView(label("저장한 도착 계획 ${timeLabel(next.getString("startVisitAt"))} · 다시 출발할 때 운영시간을 확인하세요.",13))
-                pane.addView(button(if(needsReplan)"남은 일정 다시 계산" else "코스 이어서 출발"){if(needsReplan)showPlanForm(true) else confirmCourseRoute(course)}.apply{isEnabled=pending==null&&(needsReplan||naviReady)})
-                val controls=LinearLayout(this)
-                controls.addView(softButton("방문 완료"){confirmProgress(next,"visit")},LinearLayout.LayoutParams(0,dp(50),1f).apply{rightMargin=dp(6)})
-                controls.addView(softButton("건너뛰기"){confirmProgress(next,"skip")},LinearLayout.LayoutParams(0,dp(50),1f))
-                pane.addView(controls,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(8)})
-            }
-            val timeline=column().apply{visibility=View.GONE}
-            val links=LinearLayout(this)
-            lateinit var timelineButton:Button
-            timelineButton=softButton("전체 일정 보기"){
-                val open=timeline.visibility!=View.VISIBLE
-                timeline.visibility=if(open)View.VISIBLE else View.GONE
-                timelineButton.text=if(open)"일정 접기" else "전체 일정 보기"
-            }
-            links.addView(timelineButton,LinearLayout.LayoutParams(0,dp(48),1f))
-            links.addView(softButton("일정 관리"){showCourseMenu(course)},LinearLayout.LayoutParams(0,dp(48),1f))
-            pane.addView(links)
-            for(i in 0 until stops.length()){
-                val p=stops.getJSONObject(i);val state=when(p.optString("status")){"visited"->"✓ 방문 완료";"skipped"->"건너뜀";else->if(i==index)"다음" else "예정"}
-                val row=LinearLayout(this).apply{gravity=Gravity.TOP;setPadding(0,dp(8),0,dp(4))}
-                row.addView(label(if(p.optString("status")=="visited")"✓" else "${i+1}",16,if(i==index)Color.WHITE else mint).apply{
-                    gravity=Gravity.CENTER;background=surface(if(i==index)mint else soft,12)
-                },LinearLayout.LayoutParams(dp(34),dp(34)).apply{rightMargin=dp(10)})
-                val text=column()
-                text.addView(label("${p.getString("name")} · $state",15,ink))
-                if(!needsReplan&&p.optString("status")=="planned")text.addView(label("계획 ${timeLabel(p.optString("startVisitAt"))} · 머무름 ${p.optInt("stayMinutes",60)}분",12))
-                row.addView(text,LinearLayout.LayoutParams(0,-2,1f));timeline.addView(row)
-                if(!needsReplan&&i<stops.length()-1)timeline.addView(label("↓  이동 약 ${stops.getJSONObject(i+1).optInt("legMinutes")}분 · 저장한 계획 기준",12))
-            }
-            pane.addView(timeline)
+                pane.addView(label("다음 · ${next.getString("name")}",25,ink))
+                val parking=next.optJSONObject("parking")
+                pane.addView(label(if(parking?.optString("mode")=="selected")"${parking.optString("name")}에 주차 · 장소까지 직선 ${parking.optInt("distanceMeters")}m" else "주차장 지정 안 함",14,muted))
+                val replan=course.optBoolean("needsReplan")
+                if(replan)pane.addView(label("장소가 바뀌었어요. 남은 코스를 다시 확인해 주세요.",14,MoagilBrand.warning))
+                pane.addView(button(if(replan)"남은 코스 다시 만들기" else "코스로 출발"){if(replan)showPlanForm(true)else confirmCourseRoute(course)}.apply{isEnabled=pending==null&&(replan||naviReady)})
+            }else pane.addView(label("${stops.length()}곳의 방문 기록이 남아 있어요.",16,muted))
+            pane.addView(softButton("코스 보기 · 수정"){showCourseOverview(course)})
+            pane.addView(softButton("코스 삭제"){confirmDeleteCourse(course)}.apply{setTextColor(MoagilBrand.danger);contentDescription="저장한 코스 삭제"})
         }
-        val intro=featureCard("새 코스 만들기","이동 시간과 가고 싶은 곳을 참고해 순서를 정해요. 영업시간은 직접 확인해 주세요.")
+        val intro=featureCard(if(course==null)"어디를 들를까요?" else "새 코스 만들기",if(course==null)"장소를 고르고, 주차까지 한 번에 정해요." else "다른 장소와 주차장으로 코스를 비교해 보세요.")
         intro.addView(button("코스 만들기"){showPlanForm()})
-        val plans=r.optJSONArray("plans") ?: return
-        val shownOrders=mutableSetOf<String>()
-        for(i in 0 until plans.length()){
-            val p=plans.getJSONObject(i);val stops=p.getJSONArray("stops")
-            val order=(0 until stops.length()).joinToString("|"){stops.getJSONObject(it).getString("placeId")}
-            if(!shownOrders.add(order))continue
-            val option=featureCard(p.getString("title"),p.getString("reason"))
-            option.addView(label(if(p.optString("timingSource")=="kakao-road")"도로 ${p.optDouble("roadDistanceKm")}km · 이동 약 ${p.optInt("roadMinutes")}분" else "직선 연결 ${p.optDouble("straightKm")}km · 구간당 임시 ${p.optInt("assumedMinutes")}분",13,mint))
-            for(j in 0 until stops.length()){val s=stops.getJSONObject(j);option.addView(label("${j+1}. ${s.getString("name")} · ${timeLabel(s.getString("startVisitAt"))}",15,ink))}
-            val warnings=p.optJSONArray("warnings")
-            if(warnings!=null)for(j in 0 until warnings.length())option.addView(label("· ${warnings.getString(j)}",12,MoagilBrand.warning))
-            val save=button(if(p.optInt("violations")>0)"운영시간을 조정해 주세요" else "이 코스 저장하기"){dialog().setTitle("코스를 저장할까요?").setMessage("현재 저장한 코스를 이 코스로 바꿉니다. 시동을 꺼도 방문 순서를 이어갈 수 있어요. 실제 안내는 출발 전에 다시 확인하세요.").setNegativeButton("돌아가기",null).setPositiveButton("저장"){_,_->postRoom("course",JSONObject().put("action","choose").put("planId",p.getString("id")))}.show()}
-            save.isEnabled=p.optInt("violations")==0;option.addView(save)
-        }
+        if((r.optJSONArray("plans")?.length() ?: 0)>0)intro.addView(softButton("비교한 코스 다시 보기"){showCourseComparison(r)})
     }
-    private fun showCourseMenu(course:JSONObject){
-        lateinit var sheet:AlertDialog
-        val content=column().apply{setPadding(dp(20),dp(12),dp(20),dp(12))}
-        val stops=course.getJSONArray("stops");val index=course.optInt("nextIndex")
-        if(index<stops.length()){
-            if(!course.optBoolean("needsReplan"))content.addView(choiceRow("다음 장소만 안내"){sheet.dismiss();confirmRoute(JSONObject(stops.getJSONObject(index).toString()).put("id",stops.getJSONObject(index).getString("placeId")))})
+    private fun showCourseOverview(course:JSONObject){
+        val content=courseColumn();val stops=course.getJSONArray("stops");val index=course.optInt("nextIndex")
+        content.addView(label(courseTravelText(course),19,ink));content.addView(label(parkingSummaryText(course),16,mint))
+        lateinit var popup:AlertDialog
+        for(i in 0 until stops.length()){
+            val stop=stops.getJSONObject(i);val state=when(stop.optString("status")){"visited"->"방문 완료";"skipped"->"건너뜀";else->if(i==index)"다음" else "예정"}
+            content.addView(label("${i+1}. ${stop.getString("name")} · $state",19,ink).apply{setPadding(0,dp(16),0,dp(6))})
+            val parking=stop.optJSONObject("parking")
+            content.addView(label(if(parking?.optString("mode")=="selected")"주차 · ${parking.optString("name")}\n${parking.optInt("minutes")}분 ${parkingFeeLabel(parking)} · 장소까지 직선 ${parking.optInt("distanceMeters")}m\n자료: ${parking.optString("provider").ifBlank{"지방자치단체"}} · 기준일 ${parking.optString("referenceDate").ifBlank{"미제공"}}" else "주차장 지정 안 함",14,muted))
             separator(content)
-            content.addView(choiceRow("남은 일정 다시 계산"){sheet.dismiss();showPlanForm(true)})
         }
-        if(index>0){
-            if(content.childCount>0)separator(content)
-            content.addView(choiceRow("이전 방문 처리 되돌리기"){sheet.dismiss();postRoom("course",JSONObject().put("action","undo"))})
+        val ongoing=index<stops.length()&&course.optString("status")!="cancelled"
+        if(ongoing){
+            content.addView(softButton("장소 · 주차 변경"){popup.dismiss();showPlanForm(true)})
+            val row=LinearLayout(this)
+            row.addView(softButton("방문 완료"){popup.dismiss();confirmProgress(stops.getJSONObject(index),"visit")},LinearLayout.LayoutParams(0,dp(60),1f))
+            row.addView(softButton("건너뛰기"){popup.dismiss();confirmProgress(stops.getJSONObject(index),"skip")},LinearLayout.LayoutParams(0,dp(60),1f));content.addView(row)
         }
-        if(content.childCount==0)content.addView(label("아직 변경할 일정이 없어요",15))
-        sheet=dialog().setTitle("일정 관리").setView(content).setNegativeButton("닫기",null).create();sheet.show()
+        if(index>0)content.addView(softButton("이전 방문 처리 되돌리기"){postRoom("course",JSONObject().put("action","undo")){popup.dismiss()}})
+        content.addView(softButton("코스 삭제"){confirmDeleteCourse(course){popup.dismiss()}}.apply{setTextColor(MoagilBrand.danger)})
+        content.addView(label("주차요금은 선택한 시간·차량 조건으로 계산한 예상 금액이에요. 확인된 감면만 반영하며 현장 요금과 다를 수 있어요.\n자료: 공공데이터포털 · 카카오 로컬 API · 주차장 공식 안내",12,muted))
+        popup=coursePopup().setTitle("코스 보기").setView(content).setNegativeButton("닫기",null).create();popup.show()
+    }
+    private fun showCourseMenu(course:JSONObject){showCourseOverview(course)}
+    private fun confirmDeleteCourse(course:JSONObject,deleted:()->Unit={}){
+        if(!canInteract())return
+        if(loading||pending!=null){Toast.makeText(this,"진행 중인 요청이 끝난 뒤 다시 눌러 주세요.",Toast.LENGTH_SHORT).show();return}
+        val confirm=coursePopup().setTitle("코스를 삭제할까요?").setMessage("저장한 코스와 방문 기록을 지워요.\n추가한 장소는 그대로 남아요.").setNegativeButton("취소",null).setPositiveButton("코스 삭제",null).create()
+        confirm.show()
+        val remove=confirm.getButton(AlertDialog.BUTTON_POSITIVE)
+        remove.setTextColor(Color.WHITE);remove.background=surface(Color.rgb(179,38,30),14)
+        remove.setOnClickListener{
+            if(!canInteract()||loading||pending!=null)return@setOnClickListener
+            if(!connected){Toast.makeText(this,"모임 서버 연결을 확인해 주세요.",Toast.LENGTH_SHORT).show();return@setOnClickListener}
+            remove.isEnabled=false;remove.text="삭제 중…"
+            postRoom("course",JSONObject().put("action","delete").put("courseId",course.getString("id")),failed={remove.isEnabled=true;remove.text="코스 삭제"}){
+                confirm.dismiss();deleted();Toast.makeText(this,"코스를 삭제했어요.",Toast.LENGTH_SHORT).show()
+            }
+        }
     }
     private fun confirmProgress(stop:JSONObject,action:String){
-        dialog().setTitle(if(action=="visit")"이 장소 방문을 마쳤나요?" else "이 장소를 건너뛸까요?").setMessage(stop.getString("name")+"\n방문 기록만 변경하며, 다음 목적지 안내는 직접 선택합니다.").setNegativeButton("돌아가기",null).setPositiveButton("확인"){_,_->postRoom("course",JSONObject().put("action",action).put("placeId",stop.getString("placeId")))}.show()
+        coursePopup().setTitle(if(action=="visit")"이 장소 방문을 마쳤나요?" else "이 장소를 건너뛸까요?").setMessage(stop.getString("name")+"\n방문 기록만 변경하며, 다음 목적지 안내는 직접 선택합니다.").setNegativeButton("돌아가기",null).setPositiveButton("확인"){_,_->postRoom("course",JSONObject().put("action",action).put("placeId",stop.getString("placeId")))}.show()
     }
     private fun renderBallotPane(r:JSONObject){
         val b=r.optJSONObject("ballot")
@@ -800,7 +1012,7 @@ class FamilyTripActivity : Activity() {
                 ui.post {
                     if (isDestroyed || requestGeneration!=sessionGeneration) return@post
                     val sharingChanged=localOnly!=config.getBoolean("localOnly") || publicUrl!=config.getString("publicUrl")
-                    publicUrl = config.getString("publicUrl"); localOnly = config.getBoolean("localOnly");roadRoutingEnabled=config.optBoolean("roadRoutingEnabled")
+                    publicUrl = config.getString("publicUrl"); localOnly = config.getBoolean("localOnly");roadRoutingEnabled=config.optBoolean("roadRoutingEnabled");parkingEnabled=config.optBoolean("parkingEnabled")
                     if (created) {
                         roomId = result.getString("id"); ownerToken = result.getString("ownerToken"); joinToken = result.getString("joinToken")
                         SessionStore.put(SessionStore.put(prefs.edit().putString("roomId",roomId),"ownerToken",ownerToken),"joinToken",joinToken).apply()
@@ -867,10 +1079,7 @@ class FamilyTripActivity : Activity() {
         }
         if(sorted.isEmpty()){
             val empty=column().apply { setPadding(dp(28),dp(30),dp(28),dp(25));background=surface(MoagilBrand.surface,20) }
-            empty.addView(label("↗",42,mint))
-            empty.addView(label(if(all.isEmpty()) "가고 싶은 곳을 추가해 보세요" else "이 분류에는 아직 장소가 없어요",23,ink))
-            empty.addView(label("QR로 휴대폰을 연결하고\n가고 싶은 곳을 추가해 보세요.",16))
-            if(all.isEmpty())empty.addView(button("일행 초대 QR 열기") {showInvite()})
+            empty.addView(label(if(all.isEmpty()) "함께 가고 싶은 곳을 모아보세요." else "이 분류에는 아직 장소가 없어요.",23,ink))
             cards.addView(empty);return
         }
         val columns=if(windowUnits-(if(compactScreen)40 else 262)>=720)2 else 1
@@ -987,8 +1196,15 @@ class FamilyTripActivity : Activity() {
                 field(operations,"입실 / 퇴실",listOf(visit.optString("checkIn"),visit.optString("checkOut")).filter{it.isNotBlank()}.joinToString(" / "))
                 if(operations.childCount==0)operations.addView(label("제공된 운영정보가 없어요",15,muted))
                 content.addView(label("한국관광공사 · ${date(visit.optString("checkedAt"))} 조회",11,muted).apply{setPadding(0,dp(7),0,0)})
+                if(visit.optString("providerModifiedAt").isNotBlank())content.addView(label("원본 수정일: ${visit.optString("providerModifiedAt")}",11,muted))
             }else{
                 operations.addView(label(if(visit==null)"아직 확인한 운영정보가 없어요" else "등록된 운영정보가 없어요",15,muted).apply{setPadding(0,dp(8),0,dp(8))})
+            }
+            if(visit?.optString("parking").isNullOrBlank().not()||visit?.optString("parkingFee").isNullOrBlank().not()){
+                val parking=section("시설 내 주차")
+                field(parking,"주차시설",visit?.optString("parking") ?: "")
+                field(parking,"주차요금",visit?.optString("parkingFee") ?: "")
+                content.addView(label("자료 제공: 한국관광공사 TourAPI",11,muted))
             }
             if(current.optString("note").isNotBlank())field(section("메모"),"함께 남긴 메모",current.getString("note"))
             if(current.optString("opensAt").isNotBlank())field(section("직접 확인한 시간"),"운영시간",current.optString("opensAt")+"–"+current.optString("closesAt"))
@@ -996,16 +1212,75 @@ class FamilyTripActivity : Activity() {
             val checked=runCatching{java.time.Instant.parse(visit?.optString("checkedAt")).toEpochMilli()}.getOrDefault(0)
             if(visit==null||System.currentTimeMillis()-checked>=86400000L)content.addView(softButton("운영정보 확인"){load("tourDetails")}.apply{gravity=Gravity.CENTER;background=surface(soft,12)})
             if(info==null)content.addView(softButton("전화번호 등 기본정보 확인"){load("details")}.apply{textSize=26f})
+            if(info!=null)content.addView(label("장소 정보 제공: 카카오 로컬 API",11,muted))
+            if(parkingEnabled)content.addView(softButton("주변 주차장 보기"){detail.dismiss();showParking(current)})
             content.addView(softButton("차량 내비에서 장소 찾기"){
                 if(!naviReady){Toast.makeText(this,"차량 내비 연결을 기다려 주세요",Toast.LENGTH_LONG).show();return@softButton}
                 runCatching{navi!!.requestNavigationScreen(NavigationScreenRequest.SearchPlace(current.getString("name")))}
                     .onSuccess{detail.dismiss()}
                     .onFailure{Toast.makeText(this,"차량 내비를 열지 못했어요. 잠시 후 다시 눌러 주세요",Toast.LENGTH_LONG).show()}
             }.apply{gravity=Gravity.CENTER;background=surface(soft,12);minHeight=dp(64)})
+            content.addView(softButton("데이터 출처와 이용안내"){showSources()})
         }
         draw()
         detail=placePopup().setTitle(p.getString("name")).setView(content).setNegativeButton("닫기",null).create()
         detail.show()
+    }
+    private fun showSources(){
+        val content=column().apply{setPadding(dp(22),dp(10),dp(22),dp(16))}
+        listOf(
+            "지도·장소 검색" to "Kakao Maps · 카카오 로컬 API\n지도 SDK의 로고와 저작권 표시를 유지해요.",
+            "도로 이동시간" to "카카오모빌리티 길찾기 API\nGMG의 코스 계산에 사용하며 차량 내비 안내와 다를 수 있어요.",
+            "운영정보·시설 내 주차" to "한국관광공사 TourAPI · 국문 관광정보 서비스_GW\n제공된 설명을 항목별로 정리하고 조회일과 원본 수정일을 표시해요. 데이터셋 메타정보의 이용허락범위는 제한 없음이며 사진별 이용 조건은 별도예요. 현재 TourAPI 사진은 표시하지 않아요.",
+            "주변 주차장" to "지방자치단체 · 공공데이터포털 전국주차장정보표준데이터\n시설명·주변 검색으로 부설 후보와 주변 주차장을 함께 찾아요. 제공기관·관리기관·데이터 기준일을 표시하며 원문과 기관별 이용 조건을 따라요. 카카오 로컬 API와 공식 요금·감면 안내를 함께 표시해요. 실시간 빈자리와 매장 제휴 혜택은 제공하지 않아요.",
+            "차량 연동·QR" to "Pleos Connect Vehicle SDK · NaviHelper SDK\nZXing Core 3.5.3 · Copyright © ZXing authors · Apache License 2.0\nGMG 아이콘과 화면은 프로젝트에서 제작했어요."
+        ).forEach{(title,text)->content.addView(label(title,18,ink));content.addView(label(text,14,muted).apply{setPadding(0,dp(4),0,dp(15))})}
+        content.addView(softButton("원문·이용 조건 보기"){runCatching{startActivity(Intent(Intent.ACTION_VIEW,android.net.Uri.parse(baseUrl()+"/sources")))}.onFailure{Toast.makeText(this,"웹페이지에서 /sources를 열어 주세요",Toast.LENGTH_LONG).show()}})
+        placePopup().setTitle("데이터 출처와 이용안내").setView(content).setNegativeButton("닫기",null).show()
+    }
+    private fun showParking(place:JSONObject){
+        lateinit var popup:AlertDialog
+        val content=column().apply{setPadding(dp(22),dp(10),dp(22),dp(16))}
+        var busy=false
+        fun refresh(){
+            if(busy||!canInteract())return
+            busy=true;content.removeAllViews();content.addView(label("주차정보를 확인하고 있어요…",17,ink))
+            val generation=sessionGeneration
+            io.execute{
+                val result=runCatching{request("/api/rooms/$roomId/parking",JSONObject().put("placeId",place.getString("id")))}
+                ui.post{
+                    busy=false;if(isDestroyed||generation!=sessionGeneration||!popup.isShowing)return@post
+                    content.removeAllViews()
+                    result.onSuccess{data->
+                        if(data.optString("status")!="ready")content.addView(label(data.optString("message"),16,muted))
+                        else{
+                            content.addView(label("시설 주차장과 주변 주차장",16,ink))
+                            data.optJSONObject("facilityParking")?.let{if(it.optString("status") in listOf("none","unknown"))content.addView(label(it.optString("message"),15,ink))}
+                            content.addView(label("실시간 빈자리·매장 제휴 정보는 제공하지 않아요.",13,muted))
+                            if(data.optBoolean("stale"))content.addView(label("이전에 받은 자료예요. 최신 자료를 갱신하고 있어요.",13,muted))
+                            val rows=data.getJSONArray("items")
+                            if(rows.length()==0)content.addView(label("이 반경에 등록된 주차정보가 없어요.",16,muted))
+                            fun number(p:JSONObject,key:String,suffix:String)=if(p.isNull(key))"미제공" else "${p.get(key)}$suffix"
+                            for(i in 0 until rows.length()){
+                                val p=rows.getJSONObject(i)
+                                content.addView(label("${p.getString("name")} · ${p.getInt("distanceMeters")}m",18,ink).apply{setPadding(0,dp(18),0,dp(6))})
+                                content.addView(label(p.optString("address"),14,muted))
+                                content.addView(label(if(p.optString("feeType")=="무료")"무료" else "${p.optString("feeType").ifBlank{"요금 구분 미제공"}} · 기본 ${number(p,"basicMinutes","분")} / ${number(p,"basicFee","원")}\n추가 ${number(p,"extraMinutes","분")} / ${number(p,"extraFee","원")}",15,ink))
+                                if(p.optString("operatingDays").isNotBlank())content.addView(label("운영일: ${p.optString("operatingDays")}",13,muted))
+                                listOf("평일" to "weekday","토요일" to "saturday","공휴일" to "holiday").forEach{(name,key)->if(p.optString(key).isNotBlank()&&p.optString(key)!="–")content.addView(label("$name ${p.optString(key)}",13,muted))}
+                                if(p.optString("notes").isNotBlank())content.addView(label(p.optString("notes"),13,muted))
+                                content.addView(label("제공: ${p.optString("provider").ifBlank{"지방자치단체"}}\n관리: ${p.optString("institution").ifBlank{"미제공"}}\n데이터 기준일: ${p.optString("referenceDate").ifBlank{"미제공"}}\n조회: ${data.optString("checkedAt").take(10)}",12,muted))
+                                content.addView(label("원문: ${p.optString("sourceUrl")}",12,muted))
+                                separator(content)
+                            }
+                        }
+                    }.onFailure{content.addView(label("주차정보를 확인하지 못했어요. 인증키·활용 승인·연결 상태를 확인해 주세요.",16,muted))}
+                    content.addView(label("자료: 공공데이터포털 · 카카오 로컬 API · 주차장 공식 안내",12,muted))
+                    content.addView(softButton("다시 확인"){refresh()})
+                }
+            }
+        }
+        popup=placePopup().setTitle("${place.getString("name")} 주변 주차장").setView(content).setNegativeButton("닫기",null).create();popup.show();refresh()
     }
     private fun confirmDeletePlace(p:JSONObject){
         if(loading||pending!=null){Toast.makeText(this,"연결 또는 안내 요청이 끝난 뒤 삭제해 주세요",Toast.LENGTH_LONG).show();return}
@@ -1055,10 +1330,17 @@ class FamilyTripActivity : Activity() {
                 undoPlaceId="";updateUndoBar();Toast.makeText(this,"장소를 다시 표시했어요",Toast.LENGTH_LONG).show()
             }}.show()
     }
+    private fun navigationPlace(p:JSONObject):JSONObject=JSONObject(p.toString()).apply{
+        if(p.has("navigationLatitude")&&p.has("navigationLongitude")){
+            put("latitude",p.getDouble("navigationLatitude"));put("longitude",p.getDouble("navigationLongitude"))
+            put("name",p.optString("navigationName",p.getString("name")));put("address",p.optString("navigationAddress",p.optString("address")))
+        }
+    }
     private fun confirmRoute(p: JSONObject) {
-        placePopup().setTitle("이곳으로 출발할까요?")
-            .setMessage("${p.getString("name")}\n${p.optString("address")}")
-            .setNegativeButton("취소",null).setPositiveButton("길 안내 시작") { _,_ -> sendRoute(p) }.show()
+        val target=navigationPlace(p)
+        coursePopup().setTitle("이곳으로 출발할까요?")
+            .setMessage("${target.getString("name")}\n${target.optString("address")}")
+            .setNegativeButton("취소",null).setPositiveButton("길 안내 시작") { _,_ -> sendRoute(target) }.show()
     }
     private fun sendRoute(p: JSONObject) {
         if(!canInteract())return
@@ -1085,7 +1367,7 @@ class FamilyTripActivity : Activity() {
     }
     private fun confirmCourseRoute(course:JSONObject){
         val stops=course.getJSONArray("stops");val index=course.optInt("nextIndex")
-        val route=(index until minOf(index+3,stops.length())).map{JSONObject(stops.getJSONObject(it).toString()).apply{put("id",getString("placeId"))}}
+        val route=(index until minOf(index+3,stops.length())).map{navigationPlace(JSONObject(stops.getJSONObject(it).toString()).apply{put("id",getString("placeId"))})}
         if(route.isEmpty())return
         if(course.optBoolean("needsReplan")){Toast.makeText(this,"장소가 바뀌었어요. 남은 일정을 다시 계산해 주세요.",Toast.LENGTH_LONG).show();showPlanForm(true);return}
         val content=column().apply{setPadding(dp(20),dp(10),dp(20),dp(10))}
@@ -1093,7 +1375,7 @@ class FamilyTripActivity : Activity() {
         route.forEachIndexed{i,p->content.addView(label("${i+1}. ${p.getString("name")}",18,ink))}
         content.addView(label("기본 내비의 기존 목적지와 경유지를 변경해요. 최대 3곳씩 보내며 방문 완료는 앱에서 표시해 주세요.",14))
         content.addView(label("카카오 계산과 플레오스 안내 경로·시간은 다를 수 있어요.",13))
-        dialog().setView(ScrollView(this).apply{addView(content)}).setNegativeButton("돌아가기",null).setPositiveButton("코스 보내기"){_,_->sendCourseRoute(route)}.show()
+        coursePopup().setTitle("이 코스로 출발할까요?").setView(content).setNegativeButton("취소",null).setPositiveButton("길 안내 시작"){_,_->sendCourseRoute(route)}.show()
     }
     private fun sendCourseRoute(route:List<JSONObject>){
         if(!canInteract())return

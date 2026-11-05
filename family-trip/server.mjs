@@ -6,6 +6,9 @@ import path from 'node:path';
 import {loadEnvFile} from 'node:process';
 import {timing, suggestCourses, kakaoRoadProvider} from './planner.mjs';
 import {tourApiProvider} from './tourapi.mjs';
+import {parkingApiProvider,estimateParkingFee} from './parking.mjs';
+import {parkingDiscovery} from './parking-discovery.mjs';
+import {priceParking,vehicleProfile} from './parking-policy.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 try { loadEnvFile(path.join(here, '.env')); } catch (e) { if (e.code !== 'ENOENT') throw e; }
@@ -13,7 +16,7 @@ const token = () => randomBytes(24).toString('base64url');
 const fail = (status, message) => { throw Object.assign(new Error(message), {status}); };
 const text = (value, max = 120) => typeof value === 'string' ? value.trim().slice(0, max) : '';
 
-export function createRelay({dataDir = path.join(here, 'data'), publicUrl = process.env.PUBLIC_URL || '', kakaoKey = process.env.KAKAO_REST_API_KEY || '', mapKey = process.env.KAKAO_JAVASCRIPT_KEY || '', mobilityKey = process.env.KAKAO_MOBILITY_REST_API_KEY || kakaoKey, tourKey=process.env.TOUR_API_KEY||'',fetchTour=fetch,fetchPlaces = fetch, roadProvider = null, now = Date.now, roomLifetimeMs = 30*24*60*60*1000} = {}) {
+export function createRelay({dataDir = path.join(here, 'data'), publicUrl = process.env.PUBLIC_URL || '', kakaoKey = process.env.KAKAO_REST_API_KEY || '', mapKey = process.env.KAKAO_JAVASCRIPT_KEY || '', mobilityKey = process.env.KAKAO_MOBILITY_REST_API_KEY || kakaoKey, tourKey=process.env.TOUR_API_KEY||'',fetchTour=fetch,parkingKey=process.env.PARKING_API_KEY||'',fetchParking=fetch,fetchPlaces = fetch, roadProvider = null, now = Date.now, roomLifetimeMs = 30*24*60*60*1000} = {}) {
   mkdirSync(dataDir, {recursive:true});
   const dbFile = path.join(dataDir, 'rooms.json');
   let rooms = {};
@@ -24,6 +27,8 @@ export function createRelay({dataDir = path.join(here, 'data'), publicUrl = proc
   const roadLookup=roadProvider || (mobilityKey?kakaoRoadProvider(mobilityKey):null);
   const planning=new Set();
   const tourLookup=tourKey?tourApiProvider(tourKey,fetchTour,now):null,tourPending=new Set();
+  const nationalParking=parkingKey?parkingApiProvider(parkingKey,{fetcher:fetchParking,now,cacheFile:path.join(dataDir,'parking-cache.json')}):null;
+  const parkingLookup=nationalParking||kakaoKey?parkingDiscovery({national:nationalParking,kakaoKey,fetcher:fetchPlaces,now}):null;
   const placeInfoCache=new Map();
   const rememberPlace=doc=>{
     if(!/^\d+$/.test(String(doc.id)))return null;
@@ -60,12 +65,12 @@ export function createRelay({dataDir = path.join(here, 'data'), publicUrl = proc
       if(count>(req.method==='GET'?600:120))fail(429,'요청이 많습니다. 잠시 후 다시 시도해 주세요.');
       if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}` && req.headers.origin !== `https://${req.headers.host}`) fail(403, '외부 사이트 요청은 허용하지 않습니다.');
       const url = new URL(req.url, 'http://localhost');
-      if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/app.js' || url.pathname === '/style.css' || url.pathname === '/moagil-mark.svg' || url.pathname === '/privacy')) {
-        const file = url.pathname === '/' ? 'index.html' : url.pathname === '/privacy' ? 'privacy.html' : url.pathname.slice(1);
+      if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/app.js' || url.pathname === '/style.css' || url.pathname === '/moagil-mark.svg' || url.pathname === '/privacy' || url.pathname === '/sources')) {
+        const file = url.pathname === '/' ? 'index.html' : url.pathname === '/privacy' ? 'privacy.html' : url.pathname === '/sources' ? 'sources.html' : url.pathname.slice(1);
         const type = file.endsWith('.svg') ? 'image/svg+xml; charset=utf-8' : file.endsWith('.js') ? 'text/javascript; charset=utf-8' : file.endsWith('.css') ? 'text/css; charset=utf-8' : 'text/html; charset=utf-8';
         return reply(res, 200, readFileSync(path.join(here, 'public', file), 'utf8'), type);
       }
-      if (req.method === 'GET' && url.pathname === '/api/config') return reply(res, 200, {publicUrl:publicUrl || 'http://localhost:8787', searchEnabled:!!kakaoKey, mapEnabled:!!mapKey, roadRoutingEnabled:!!roadLookup,tourInfoEnabled:!!tourLookup, recommendationEngine:'constraint-search', mapJavascriptKey:mapKey, localOnly:!publicUrl});
+      if (req.method === 'GET' && url.pathname === '/api/config') return reply(res, 200, {publicUrl:publicUrl || 'http://localhost:8787', searchEnabled:!!kakaoKey, mapEnabled:!!mapKey, roadRoutingEnabled:!!roadLookup,tourInfoEnabled:!!tourLookup,parkingEnabled:!!parkingLookup, recommendationEngine:'constraint-search', mapJavascriptKey:mapKey, localOnly:!publicUrl});
       if (req.method === 'POST' && url.pathname === '/api/rooms') {
         if (!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress)) fail(403, '여행방은 차량 또는 PC 내부에서만 만들 수 있습니다.');
         const input = await body(req);
@@ -74,7 +79,7 @@ export function createRelay({dataDir = path.join(here, 'data'), publicUrl = proc
         rooms[r.id] = r; save();
         return reply(res, 201, {...snapshot(r), ownerToken:r.ownerToken, joinToken:r.joinToken});
       }
-      const match = url.pathname.match(/^\/api\/rooms\/([a-f0-9]{12})(?:\/(places|vote|select|search|settings|timing|plan|course|ballot|session))?$/);
+      const match = url.pathname.match(/^\/api\/rooms\/([a-f0-9]{12})(?:\/(places|vote|select|search|settings|timing|plan|course|ballot|session|parking))?$/);
       if (!match) fail(404, '찾을 수 없는 주소입니다.');
       const r = rooms[match[1]];
       const auth = req.headers.authorization?.replace(/^Bearer /, '');
@@ -93,6 +98,19 @@ export function createRelay({dataDir = path.join(here, 'data'), publicUrl = proc
       }
       if (req.method !== 'POST') fail(405, '지원하지 않는 요청입니다.');
       const input = await body(req);
+      if(match[2]==='parking'){
+        if(!parkingLookup)fail(503,'주차장 API 인증키를 서버에 입력해 주세요.');
+        const place=r.places.find(p=>p.id===input.placeId);if(!place)fail(404,'목록에 있는 장소를 선택해 주세요.');
+        const minutes=input.minutes===undefined?60:Number(input.minutes);
+        if(!Number.isInteger(minutes)||minutes<15||minutes>480)fail(400,'주차 비교 시간은 15~480분으로 선택하세요.');
+        let vehicle;try{vehicle=vehicleProfile(input.vehicle);}catch(e){fail(400,e.message);}
+        const result=await parkingLookup(place);
+        if(result.status==='ready'){
+          result.items=result.items.map(p=>priceParking(p,minutes,vehicle,now));result.vehicle=vehicle;
+          if(input.sort==='price')result.items.sort((a,b)=>(a.estimatedFee??Infinity)-(b.estimatedFee??Infinity)||a.distanceMeters-b.distanceMeters);
+        }
+        return reply(res,200,result);
+      }
       if(match[2]==='session'){
         owner(r,auth);
         if(input.action==='rotateInvite'){r.joinToken=token();r.closedAt=null;r.expiresAt=now()+roomLifetimeMs;changed(r);return reply(res,200,{...snapshot(r),joinToken:r.joinToken});}
@@ -144,8 +162,27 @@ export function createRelay({dataDir = path.join(here, 'data'), publicUrl = proc
           const prefix=input.remainingOnly?r.course?.stops.slice(0,r.course.nextIndex):[];
           const remaining=input.remainingOnly?r.course?.stops.slice(r.course.nextIndex):null;
           if(input.remainingOnly&&!remaining?.length)fail(400,'다시 계산할 남은 방문지가 없습니다.');
-          const pool=remaining?r.places.filter(p=>remaining.some(s=>s.placeId===p.id)):r.places;
-          const plans=await suggestCourses({places:pool,origin:input.origin,startAt:input.startAt,maxStops:remaining?remaining.length:input.maxStops,assumedMinutes:input.assumedMinutes,roadProvider:roadLookup});
+          let pool=remaining?r.places.filter(p=>remaining.some(s=>s.placeId===p.id)):r.places;
+          const explicit=input.placeIds!==undefined;
+          const vehicle=vehicleProfile(input.vehicle);
+          if(explicit){
+            if(!Array.isArray(input.placeIds)||!input.placeIds.length||input.placeIds.length>5||new Set(input.placeIds).size!==input.placeIds.length)fail(400,'코스에 넣을 장소를 1~5곳 선택해 주세요.');
+            const completed=new Set((prefix||[]).map(s=>s.placeId));
+            pool=input.placeIds.map(id=>{const p=r.places.find(p=>p.id===id&&!p.demo&&!completed.has(id));if(!p)fail(400,'선택한 장소가 바뀌었어요. 장소를 다시 선택해 주세요.');return {...p,parking:{mode:'none'}};});
+            const selections=input.parkingSelections||{};
+            if(typeof selections!=='object'||Array.isArray(selections)||Object.keys(selections).some(id=>!input.placeIds.includes(id)))fail(400,'선택한 장소의 주차 설정을 확인해 주세요.');
+            for(const p of pool){
+              const selection=selections[p.id];if(!selection||selection.mode==='none')continue;
+              if(!parkingLookup)fail(503,'주차정보 연결을 확인해 주세요.');
+              const found=await parkingLookup(p);if(found.status!=='ready')fail(503,'주차정보를 준비하고 있어요. 잠시 후 다시 계산해 주세요.');
+              const parking=found.items.find(item=>item.id===selection.parkingId);if(!parking)fail(409,'선택한 주차정보가 바뀌었어요. 주차장을 다시 선택해 주세요.');
+              const minutes=Number(selection.minutes);
+              p.parking={...priceParking(parking,minutes,vehicle,now),mode:'selected',minutes,checkedAt:found.checkedAt,stale:found.stale};
+              p.navigationTarget={latitude:parking.latitude,longitude:parking.longitude,name:`${p.name} · ${parking.name}`,address:parking.address};
+            }
+          }
+          const plans=await suggestCourses({places:pool,origin:input.origin,startAt:input.startAt,maxStops:explicit?pool.length:remaining?remaining.length:input.maxStops,assumedMinutes:input.assumedMinutes,roadProvider:roadLookup,comparison:explicit?'driving':undefined});
+          if(explicit)for(const p of plans)p.vehicle=vehicle;
           if(input.remainingOnly)for(const p of plans)p.prefixStops=structuredClone(prefix);
           if(r.revision!==version)fail(409,'계산 중 장소나 투표가 바뀌었어요. 다시 추천해 주세요.');
           r.plans=plans;return reply(res,200,changed(r));
@@ -158,6 +195,10 @@ export function createRelay({dataDir = path.join(here, 'data'), publicUrl = proc
           if(p.violations>0)fail(400,'운영시간과 충돌하는 코스입니다. 방문 조건이나 출발 시간을 바꿔 다시 계산하세요.');
           const prefix=p.prefixStops||[];
           r.course={...structuredClone(p),stops:[...structuredClone(prefix),...structuredClone(p.stops)],status:'active',selectedAt:Date.now(),nextIndex:prefix.length};
+        }else if(input.action==='delete'){
+          if(!r.course||typeof input.courseId!=='string'||r.course.id!==input.courseId)fail(409,'코스가 바뀌었어요. 현재 코스를 다시 확인해 주세요.');
+          r.course=null;r.plans=[];
+          for(const p of r.deletedPlaces||[]){delete p._courseBeforeDelete;delete p._courseAfterDelete;}
         }else if(['visit','skip'].includes(input.action)){
           const c=r.course;if(!c||c.status!=='active')fail(409,'진행 중인 코스가 없습니다.');
           const next=c.stops[c.nextIndex];if(next?.placeId!==input.placeId)fail(409,'현재 방문 순서를 다시 확인하세요.');
@@ -206,7 +247,7 @@ export function createRelay({dataDir = path.join(here, 'data'), publicUrl = proc
           if(!['food','cafe','trip','stay','other'].includes(category||'other'))fail(400,'장소 분류를 확인하세요.');
           if(r.places.some(q=>q.id!==p.id&&q.name===name&&Math.abs(q.latitude-p.latitude)<0.0001&&Math.abs(q.longitude-p.longitude)<0.0001))fail(409,'같은 위치에 같은 이름의 장소가 이미 있어요.');
           p.name=name;p.note=note;p.category=category||'other';
-          if(r.course?.status==='active')for(const stop of r.course.stops.slice(r.course.nextIndex))if(stop.placeId===p.id)stop.name=name;
+          if(r.course?.status==='active')for(const stop of r.course.stops.slice(r.course.nextIndex))if(stop.placeId===p.id){stop.name=name;if(stop.parking?.mode==='selected')stop.navigationName=`${name} · ${stop.parking.name}`;}
           r.plans=[];return reply(res,200,changed(r));
         }
         if(input.action==='delete'){

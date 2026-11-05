@@ -90,6 +90,39 @@ function renderPlaceInfo(p){
  if(visit?.status==='matched'){
   if(!group('운영정보',[['영업·이용시간',visit.operatingHours],['휴일',visit.restDays],['요금',visit.fees],['메뉴',visit.menu],['입실',visit.checkIn],['퇴실',visit.checkOut]]))box.append(el('p','제공된 운영정보가 없어요.','detail-empty'));
  }else box.append(el('p',visit?'등록된 운영정보가 없어요.':'아직 확인한 운영정보가 없어요.','detail-empty'));
+ if(visit?.parking||visit?.parkingFee){group('시설 내 주차',[['주차시설',visit.parking],['주차요금',visit.parkingFee]]);box.append(el('small','자료: 한국관광공사 TourAPI · '+new Date(visit.checkedAt).toLocaleDateString('ko-KR')+' 조회'));}
+ if(config?.parkingEnabled&&p.id){
+  const area=el('section',undefined,'parking-results'),load=el('button','주변 주차장 보기','visit-load');load.type='button';load.disabled=!online;
+  load.onclick=async()=>{
+   load.disabled=true;area.replaceChildren(el('p','주차정보를 확인하고 있어요…','detail-feedback'));
+   try{
+    const result=await api('/parking',{placeId:p.id});if(!box.isConnected||selected?.id!==p.id)return;
+    area.replaceChildren();
+    if(result.status!=='ready'){area.append(el('p',result.message,'detail-feedback'));load.textContent='다시 확인';return;}
+    if(['none','unknown'].includes(result.facilityParking?.status))area.append(el('p',result.facilityParking.message,'detail-feedback'));
+    if(result.facilityParking?.sourceUrl){const source=el('a','시설 주차 안내 원문 ↗');try{const u=new URL(result.facilityParking.sourceUrl);if(u.protocol==='https:'&&u.hostname==='royal.khs.go.kr'){source.href=u.href;source.target='_blank';source.rel='noopener noreferrer';area.append(source);}}catch{}}
+    area.append(el('p','시설 주차장과 주변 주차장 · 직선거리 기준 · 실시간 빈자리 미제공','detail-feedback'));
+    if(result.stale)area.append(el('p','이전에 받은 자료예요. 최신 자료를 갱신하고 있어요.','detail-feedback'));
+    if(!result.items.length)area.append(el('p','이 반경에 등록된 주차정보가 없어요.','detail-empty'));
+    const fee=(n)=>n==null?'미제공':n.toLocaleString('ko-KR')+'원';
+    for(const item of result.items){
+     const card=el('article',undefined,'parking-card');card.append(el('h4',item.name+' · '+item.distanceMeters+'m'),el('p',item.address));
+     if(item.relation==='facility')card.append(el('small','공식 안내로 확인한 시설 주차장'));
+     else if(item.relation==='facility_candidate')card.append(el('small','시설명으로 찾은 후보 · 전용·제휴 여부 확인 필요'));
+     card.append(el('p',item.feeType==='무료'?'무료':`${item.feeType||'요금 구분 미제공'} · 기본 ${item.basicMinutes??'미제공'}분 / ${fee(item.basicFee)} · 추가 ${item.extraMinutes??'미제공'}분 / ${fee(item.extraFee)}`));
+     if(item.operatingDays)card.append(el('p','운영일: '+item.operatingDays));
+     for(const [label,value] of [['평일',item.weekday],['토요일',item.saturday],['공휴일',item.holiday]])if(value&&value!=='–')card.append(el('p',label+' '+value));
+     if(item.notes)card.append(el('p',item.notes));
+     card.append(el('small',`제공: ${item.provider||'지방자치단체'} · 관리: ${item.institution||'미제공'}\n데이터 기준일: ${item.referenceDate||'미제공'} · 조회: ${new Date(result.checkedAt).toLocaleDateString('ko-KR')}`));
+     const source=el('a','자료 원문 ↗');
+     try{const url=new URL(item.sourceUrl||'https://www.data.go.kr/data/15012896/standard.do');if(url.protocol==='https:'&&['www.data.go.kr','place.map.kakao.com','royal.khs.go.kr'].includes(url.hostname)){source.href=url.href;source.target='_blank';source.rel='noopener noreferrer';card.append(source);}}catch{}
+     area.append(card);
+    }
+    load.textContent='주차정보 새로 확인';
+   }catch{area.replaceChildren(el('p','주차정보를 확인하지 못했어요. 잠시 후 다시 눌러 주세요.','detail-feedback'));load.textContent='다시 확인';}
+   finally{load.disabled=!online;}
+  };box.append(load,area);
+ }
  if(p.note)group('메모',[['함께 남긴 메모',p.note]]);
  const canLookup=config?.tourInfoEnabled&&p.id&&(!visit||!Number.isFinite(Date.parse(visit.checkedAt))||Date.now()-Date.parse(visit.checkedAt)>=86400000);
  if(canLookup){
@@ -106,6 +139,8 @@ function renderPlaceInfo(p){
   if(visit)sources.append(el('small','한국관광공사 TourAPI · '+date(visit.checkedAt)));
   box.append(sources);
  }
+ if(info)box.append(el('small','장소 정보 제공: 카카오 로컬 API'));
+ const credits=el('a','데이터 출처와 이용안내','detail-map-link');credits.href='/sources';credits.target='_blank';credits.rel='noopener noreferrer';box.append(credits);
 }
 function categoryOf(p){return ['food','cafe','trip','stay','other'].includes(p.category)?p.category:({FD6:'food',CE7:'cafe',AT4:'trip',CT1:'trip',AD5:'stay'})[p.categoryCode]||'other';}
 async function addPlace(){

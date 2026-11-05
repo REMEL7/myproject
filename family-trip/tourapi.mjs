@@ -4,11 +4,11 @@ const plain=value=>String(value??'').replace(/<br\s*\/?\s*>/gi,'\n').replace(/<[
 const nameKey=value=>plain(value).normalize('NFKC').replace(/[^\p{L}\p{N}]/gu,'').toLowerCase();
 const items=data=>{const value=data?.response?.body?.items?.item;return Array.isArray(value)?value:value&&typeof value==='object'?[value]:[];};
 const fields={
- '12':{hours:'usetime',rest:'restdate'},
- '14':{hours:'usetimeculture',rest:'restdateculture',fee:'usefee'},
- '28':{hours:'usetimeleports',rest:'restdateleports',fee:'usefeeleports'},
- '32':{},'38':{hours:'opentime',rest:'restdateshopping'},
- '39':{hours:'opentimefood',rest:'restdatefood'}
+ '12':{hours:'usetime',rest:'restdate',parking:'parking'},
+ '14':{hours:'usetimeculture',rest:'restdateculture',fee:'usefee',parking:'parkingculture',parkingFee:'parkingfee'},
+ '28':{hours:'usetimeleports',rest:'restdateleports',fee:'usefeeleports',parking:'parkingleports',parkingFee:'parkingfeeleports'},
+ '32':{parking:'parkinglodging'},'38':{hours:'opentime',rest:'restdateshopping',parking:'parkingshopping'},
+ '39':{hours:'opentimefood',rest:'restdatefood',parking:'parkingfood'}
 };
 
 /** Provider text is display-only: holiday prose is never converted into route constraints. */
@@ -16,7 +16,7 @@ export function normalizeVisitInfo(candidate,intro,repeated,now=Date.now){
  const type=String(candidate.contenttypeid),mapping=fields[type]||{},fees=[];
  if(mapping.fee&&plain(intro[mapping.fee]))fees.push(plain(intro[mapping.fee]));
  for(const row of repeated){const title=plain(row.infoname||row.infotitle),text=plain(row.infotext);if(/이용요금|입장료|관람료|이용료|체험비|요금안내/.test(title.replace(/\s/g,''))&&text)fees.push(title+': '+text);}
- return {provider:'tourapi',status:'matched',contentId:String(candidate.contentid),contentTypeId:type,sourceName:plain(candidate.title),sourceAddress:plain(candidate.addr1),sourceUrl:'https://www.data.go.kr/data/15101578/openapi.do',checkedAt:new Date(now()).toISOString(),providerModifiedAt:plain(candidate.modifiedtime),operatingHours:plain(intro[mapping.hours]),restDays:plain(intro[mapping.rest]),fees:[...new Set(fees)].join('\n').slice(0,3000),menu:plain(intro.treatmenu||intro.firstmenu),checkIn:plain(intro.checkintime),checkOut:plain(intro.checkouttime),routeUsable:false};
+ return {provider:'tourapi',status:'matched',contentId:String(candidate.contentid),contentTypeId:type,sourceName:plain(candidate.title),sourceAddress:plain(candidate.addr1),sourceUrl:'https://www.data.go.kr/data/15101578/openapi.do',checkedAt:new Date(now()).toISOString(),providerModifiedAt:plain(candidate.modifiedtime),operatingHours:plain(intro[mapping.hours]),restDays:plain(intro[mapping.rest]),fees:[...new Set(fees)].join('\n').slice(0,3000),menu:plain(intro.treatmenu||intro.firstmenu),checkIn:plain(intro.checkintime),checkOut:plain(intro.checkouttime),parking:plain(intro[mapping.parking]),parkingFee:plain(intro[mapping.parkingFee]),routeUsable:false};
 }
 
 export function tourApiProvider(key,fetcher=fetch,now=Date.now){
