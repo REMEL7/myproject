@@ -9,6 +9,7 @@ import {tourApiProvider} from './tourapi.mjs';
 import {parkingApiProvider,estimateParkingFee} from './parking.mjs';
 import {parkingDiscovery} from './parking-discovery.mjs';
 import {priceParking,vehicleProfile} from './parking-policy.mjs';
+import {chooseParking,admissionEstimate,costPeople,courseCosts,cheaperParkingPlaces,courseProgressView,attachCostComparisons} from './course-costs.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 try { loadEnvFile(path.join(here, '.env')); } catch (e) { if (e.code !== 'ENOENT') throw e; }
@@ -29,6 +30,29 @@ export function createRelay({dataDir = path.join(here, 'data'), publicUrl = proc
   const tourLookup=tourKey?tourApiProvider(tourKey,fetchTour,now):null,tourPending=new Set();
   const nationalParking=parkingKey?parkingApiProvider(parkingKey,{fetcher:fetchParking,now,cacheFile:path.join(dataDir,'parking-cache.json')}):null;
   const parkingLookup=nationalParking||kakaoKey?parkingDiscovery({national:nationalParking,kakaoKey,fetcher:fetchPlaces,now}):null;
+  const setupPending=new Set();
+  async function prepareCourse(r,input,excluded=new Set()){
+    const ids=input.placeIds;
+    if(!Array.isArray(ids)||!ids.length||ids.length>5||new Set(ids).size!==ids.length)fail(400,'코스에 넣을 장소를 1~5곳 선택해 주세요.');
+    const vehicle=vehicleProfile(input.vehicle),people=costPeople(input.adultCount);
+    const selections=input.parkingSelections??{},overrides=input.admissionOverrides??{};
+    for(const choices of [selections,overrides])if(!choices||typeof choices!=='object'||Array.isArray(choices)||Object.keys(choices).some(id=>!ids.includes(id)))fail(400,'선택한 장소의 비용 설정을 확인해 주세요.');
+    const pool=ids.map(id=>{const p=r.places.find(p=>p.id===id&&!p.demo&&!excluded.has(id));if(!p)fail(400,'선택한 장소가 바뀌었어요. 다시 선택해 주세요.');return {...p};});
+    await Promise.all(pool.map(async p=>{
+      const [parking,info]=await Promise.all([
+        chooseParking(p,selections[p.id],{lookup:parkingLookup,vehicle,now}),
+        (async()=>{
+          if(overrides[p.id]!==undefined||['food','cafe','stay'].includes(p.category))return null;
+          const cached=p.visitInfo;if(cached?.status==='matched'&&now()-Date.parse(cached.checkedAt)<86400000)return cached;
+          if(!tourLookup)return null;
+          let timer;try{return await Promise.race([tourLookup(p),new Promise(resolve=>{timer=setTimeout(()=>resolve(null),9000);})]);}catch{return null;}finally{clearTimeout(timer);}
+        })()
+      ]);
+      p.parking=parking;p.admission=admissionEstimate(p,info,people,overrides[p.id]);
+      if(parking.mode==='selected')p.navigationTarget={latitude:parking.latitude,longitude:parking.longitude,name:`${p.name} · ${parking.name}`,address:parking.address};
+    }));
+    return {pool,vehicle,people};
+  }
   const placeInfoCache=new Map();
   const rememberPlace=doc=>{
     if(!/^\d+$/.test(String(doc.id)))return null;
@@ -40,7 +64,7 @@ export function createRelay({dataDir = path.join(here, 'data'), publicUrl = proc
   const ballotView=(b,r)=>!b?null:{id:b.id,status:b.status,candidateIds:b.candidateIds,castCount:Object.keys(b.votes).length,closedAt:b.closedAt||null,cancelled:!!b.cancelled,...(b.status==='closed'?{counts:b.counts,winnerIds:b.winnerIds,candidateNames:Object.fromEntries(b.candidateIds.map(id=>[id,[...r.places,...(r.deletedPlaces||[])].find(p=>p.id===id)?.name||'삭제된 장소']))}:{})};
   const snapshot=r=>{
     const secret=!!r.ballot;
-    return {id:r.id,expiresAt:r.expiresAt,closedAt:r.closedAt||null,name:r.name,groupType:r.groupType||'together',decisionMode:r.decisionMode||'',selectedId:r.selectedId,revision:r.revision,canUndoPlaceDelete:!!r.deletedPlaces?.length,ballot:ballotView(r.ballot,r),plans:r.plans||[],course:r.course||null,places:r.places.map(p=>({id:p.id,name:p.name,address:p.address,sender:p.sender,note:p.note,category:p.category||'other',info:p.info||null,visitInfo:p.visitInfo||null,latitude:p.latitude,longitude:p.longitude,createdAt:p.createdAt,demo:!!p.demo,opensAt:p.opensAt||'',closesAt:p.closesAt||'',stayMinutes:p.stayMinutes||60,mustVisit:!!p.mustVisit,hoursSource:p.opensAt?'직접 확인':'확인 필요',votes:secret?null:p.voters.length,supporters:secret?[]:p.voters.map(id=>r.members?.[id]).filter(Boolean),unnamedVotes:secret?null:p.voters.filter(id=>!r.members?.[id]).length}))};
+    return {id:r.id,expiresAt:r.expiresAt,closedAt:r.closedAt||null,name:r.name,groupType:r.groupType||'together',decisionMode:r.decisionMode||'',selectedId:r.selectedId,revision:r.revision,canUndoPlaceDelete:!!r.deletedPlaces?.length,ballot:ballotView(r.ballot,r),plans:r.plans||[],course:courseProgressView(r.course),places:r.places.map(p=>({id:p.id,name:p.name,address:p.address,sender:p.sender,note:p.note,category:p.category||'other',info:p.info||null,visitInfo:p.visitInfo||null,latitude:p.latitude,longitude:p.longitude,createdAt:p.createdAt,demo:!!p.demo,opensAt:p.opensAt||'',closesAt:p.closesAt||'',stayMinutes:p.stayMinutes||60,mustVisit:!!p.mustVisit,hoursSource:p.opensAt?'직접 확인':'확인 필요',votes:secret?null:p.voters.length,supporters:secret?[]:p.voters.map(id=>r.members?.[id]).filter(Boolean),unnamedVotes:secret?null:p.voters.filter(id=>!r.members?.[id]).length}))};
   };
   const owner=(r,auth)=>{if(auth!==r.ownerToken)fail(403,'이 작업은 차량의 모임 진행자만 할 수 있습니다.');};
   const changed=r=>{r.revision++;save();return snapshot(r);};
@@ -164,25 +188,25 @@ export function createRelay({dataDir = path.join(here, 'data'), publicUrl = proc
           if(input.remainingOnly&&!remaining?.length)fail(400,'다시 계산할 남은 방문지가 없습니다.');
           let pool=remaining?r.places.filter(p=>remaining.some(s=>s.placeId===p.id)):r.places;
           const explicit=input.placeIds!==undefined;
-          const vehicle=vehicleProfile(input.vehicle);
+          let vehicle=vehicleProfile(input.vehicle),people=costPeople(input.adultCount);
           if(explicit){
             if(!Array.isArray(input.placeIds)||!input.placeIds.length||input.placeIds.length>5||new Set(input.placeIds).size!==input.placeIds.length)fail(400,'코스에 넣을 장소를 1~5곳 선택해 주세요.');
             const completed=new Set((prefix||[]).map(s=>s.placeId));
             pool=input.placeIds.map(id=>{const p=r.places.find(p=>p.id===id&&!p.demo&&!completed.has(id));if(!p)fail(400,'선택한 장소가 바뀌었어요. 장소를 다시 선택해 주세요.');return {...p,parking:{mode:'none'}};});
-            const selections=input.parkingSelections||{};
-            if(typeof selections!=='object'||Array.isArray(selections)||Object.keys(selections).some(id=>!input.placeIds.includes(id)))fail(400,'선택한 장소의 주차 설정을 확인해 주세요.');
-            for(const p of pool){
-              const selection=selections[p.id];if(!selection||selection.mode==='none')continue;
-              if(!parkingLookup)fail(503,'주차정보 연결을 확인해 주세요.');
-              const found=await parkingLookup(p);if(found.status!=='ready')fail(503,'주차정보를 준비하고 있어요. 잠시 후 다시 계산해 주세요.');
-              const parking=found.items.find(item=>item.id===selection.parkingId);if(!parking)fail(409,'선택한 주차정보가 바뀌었어요. 주차장을 다시 선택해 주세요.');
-              const minutes=Number(selection.minutes);
-              p.parking={...priceParking(parking,minutes,vehicle,now),mode:'selected',minutes,checkedAt:found.checkedAt,stale:found.stale};
-              p.navigationTarget={latitude:parking.latitude,longitude:parking.longitude,name:`${p.name} · ${parking.name}`,address:parking.address};
-            }
+            const prepared=await prepareCourse(r,input,completed);pool=prepared.pool;vehicle=prepared.vehicle;people=prepared.people;
           }
           const plans=await suggestCourses({places:pool,origin:input.origin,startAt:input.startAt,maxStops:explicit?pool.length:remaining?remaining.length:input.maxStops,assumedMinutes:input.assumedMinutes,roadProvider:roadLookup,comparison:explicit?'driving':undefined});
-          if(explicit)for(const p of plans)p.vehicle=vehicle;
+          if(explicit){
+            const cheaper=await cheaperParkingPlaces(pool,{lookup:parkingLookup,vehicle,now});
+            const cost=cheaper.changes.length?(await suggestCourses({places:cheaper.pool,origin:input.origin,startAt:input.startAt,maxStops:pool.length,assumedMinutes:input.assumedMinutes,roadProvider:roadLookup,comparison:'driving',drivingModes:['time']}))[0]:structuredClone(plans[0]);
+            cost.id=randomUUID();cost.strategy='cost';cost.title='예상비용 우선';
+            cost.reason=cheaper.changes.length?'자동 선택된 주차장을 확인된 요금이 적은 곳으로 바꿔 비교했어요. 장소와 관람료는 같아요.':'확인된 요금과 직접 선택한 주차장을 기준으로는 비용을 더 낮출 변경이 없어요.';
+            cost.costComparison={changedCount:cheaper.changes.length,changes:cheaper.changes,unknownCandidates:cheaper.unknownCandidates,knownCandidates:cheaper.knownCandidates,scope:'known-parking-fees',maxStraightMeters:1000};
+            cost.warnings.push('비용 우선은 검색된 주차장 중 확인된 요금만 비교해요. 미확인 요금·실시간 빈자리·이용 자격·식비·유류비·통행료는 비교하지 않아요. 직접 고른 주차장과 주차 안 함은 유지해요.');
+            plans.push(cost);
+            for(const p of plans){p.vehicle=vehicle;p.costSummary={...courseCosts(p.stops,people),scope:input.remainingOnly?'remaining':'course'};p.adultCount=people;}
+            attachCostComparisons(plans);
+          }
           if(input.remainingOnly)for(const p of plans)p.prefixStops=structuredClone(prefix);
           if(r.revision!==version)fail(409,'계산 중 장소나 투표가 바뀌었어요. 다시 추천해 주세요.');
           r.plans=plans;return reply(res,200,changed(r));
@@ -190,6 +214,14 @@ export function createRelay({dataDir = path.join(here, 'data'), publicUrl = proc
       }
       if(match[2]==='course'){
         owner(r,auth);
+        if(input.action==='prepare'){
+          if(setupPending.has(r.id))fail(409,'주차장·요금을 확인 중이에요. 잠시 기다려 주세요.');
+          setupPending.add(r.id);const revision=r.revision;
+          try{const prepared=await prepareCourse(r,input);if(r.revision!==revision)fail(409,'확인 중 장소가 바뀌었어요. 다시 확인해 주세요.');return reply(res,200,{places:prepared.pool.map(p=>({placeId:p.id,parking:p.parking,admission:p.admission})),vehicle:prepared.vehicle,costSummary:courseCosts(prepared.pool,prepared.people)});}
+          catch(e){fail(e.status||400,e.message);}finally{setupPending.delete(r.id);}
+        }
+        if(['arrive','visit','skip','undo'].includes(input.action)&&input.courseId!==undefined&&input.courseId!==r.course?.id)fail(409,'코스가 바뀌었어요. 현재 코스를 다시 확인해 주세요.');
+        if(['arrive','visit','skip','undo'].includes(input.action)&&input.expectedIndex!==undefined&&input.expectedIndex!==r.course?.nextIndex)fail(409,'방문 순서가 바뀌었어요. 현재 장소를 다시 확인해 주세요.');
         if(input.action==='choose'){
           const p=r.plans.find(p=>p.id===input.planId);if(!p)fail(404,'추천 코스를 다시 불러와 주세요.');
           if(p.violations>0)fail(400,'운영시간과 충돌하는 코스입니다. 방문 조건이나 출발 시간을 바꿔 다시 계산하세요.');
@@ -199,6 +231,11 @@ export function createRelay({dataDir = path.join(here, 'data'), publicUrl = proc
           if(!r.course||typeof input.courseId!=='string'||r.course.id!==input.courseId)fail(409,'코스가 바뀌었어요. 현재 코스를 다시 확인해 주세요.');
           r.course=null;r.plans=[];
           for(const p of r.deletedPlaces||[]){delete p._courseBeforeDelete;delete p._courseAfterDelete;}
+        }else if(input.action==='arrive'){
+          const c=r.course;if(!c||c.status!=='active')fail(409,'진행 중인 코스가 없습니다.');
+          const next=c.stops[c.nextIndex];if(next?.placeId!==input.placeId)fail(409,'현재 방문 순서를 다시 확인하세요.');
+          if(next.status==='arrived')return reply(res,200,snapshot(r));
+          next.status='arrived';next.arrivedAt=now();r.plans=[];
         }else if(['visit','skip'].includes(input.action)){
           const c=r.course;if(!c||c.status!=='active')fail(409,'진행 중인 코스가 없습니다.');
           const next=c.stops[c.nextIndex];if(next?.placeId!==input.placeId)fail(409,'현재 방문 순서를 다시 확인하세요.');
@@ -207,7 +244,7 @@ export function createRelay({dataDir = path.join(here, 'data'), publicUrl = proc
         }else if(input.action==='undo'){
           const c=r.course;if(!c||!c.nextIndex)fail(409,'되돌릴 방문 기록이 없습니다.');
           if(!r.places.some(p=>p.id===c.stops[c.nextIndex-1].placeId))fail(409,'삭제된 장소의 방문 기록입니다. 장소를 먼저 복원해 주세요.');
-          c.nextIndex--;c.stops[c.nextIndex].status='planned';delete c.stops[c.nextIndex].completedAt;c.status='active';
+          c.nextIndex--;c.stops[c.nextIndex].status=c.stops[c.nextIndex].arrivedAt?'arrived':'planned';delete c.stops[c.nextIndex].completedAt;c.status='active';
           r.plans=[];
         }else fail(400,'코스 동작을 확인하세요.');
         return reply(res,200,changed(r));
@@ -320,13 +357,14 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const relay = createRelay();
   relay.listen(port, '127.0.0.1', () => console.log(`Moagil local relay listening on 127.0.0.1:${port}`));
   if (host !== '127.0.0.1') {
+    const persistent=process.env.PHONE_SHARE_PERSISTENT==='1';
     const approvedUntil=Number(process.env.PHONE_SHARE_UNTIL || Date.now()+30*60*1000);
-    if(!Number.isFinite(approvedUntil)||approvedUntil<=Date.now()){relay.setPublicUrl('');console.log('Phone sharing approval expired; local relay only.');}
+    if(!persistent&&(!Number.isFinite(approvedUntil)||approvedUntil<=Date.now())){relay.setPublicUrl('');console.log('Phone sharing approval expired; local relay only.');}
     else {
     const shareMs=Math.min(24*60*60*1000,approvedUntil-Date.now());
     const lan = http.createServer(relay.listeners('request')[0]);
-    lan.listen(port, host, () => console.log(`Temporary phone listener: ${host}:${port} (${Math.ceil(shareMs/60000)} minutes remaining)`));
-    setTimeout(() => {lan.close();lan.closeAllConnections();relay.setPublicUrl('');console.log('Phone listener closed; local relay remains available.');},shareMs).unref();
+    lan.listen(port, host, () => console.log(persistent?`Phone listener: ${host}:${port} (until this server is stopped)`:`Temporary phone listener: ${host}:${port} (${Math.ceil(shareMs/60000)} minutes remaining)`));
+    if(!persistent)setTimeout(() => {lan.close();lan.closeAllConnections();relay.setPublicUrl('');console.log('Phone listener closed; local relay remains available.');},shareMs).unref();
     }
   }
 }

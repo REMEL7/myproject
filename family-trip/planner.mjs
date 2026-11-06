@@ -38,12 +38,12 @@ function evaluate(order,origin,startAt,assumedMinutes,roadSeconds){
     if(warning)warnings.push(`${p.name}: ${warning}`);
     popularityDelay+=(p.votes||0)*((begin-Date.parse(startAt))/60000);
     cursor=begin+p.stayMinutes*60000;
-    stops.push({placeId:p.id,name:p.name,address:p.address,latitude:p.latitude,longitude:p.longitude,opensAt:p.opensAt||'',closesAt:p.closesAt||'',stayMinutes:p.stayMinutes,arrivalAt:new Date(arrived).toISOString(),startVisitAt:new Date(begin).toISOString(),departureAt:new Date(cursor).toISOString(),legMinutes:Math.round(leg),warning,status:'planned',...(p.parking?{parking:structuredClone(p.parking)}:{}),...(p.navigationTarget?{navigationLatitude:destination.latitude,navigationLongitude:destination.longitude,navigationName:destination.name,navigationAddress:destination.address,arrivalTarget:'parking'}:{})});
+    stops.push({placeId:p.id,name:p.name,address:p.address,latitude:p.latitude,longitude:p.longitude,opensAt:p.opensAt||'',closesAt:p.closesAt||'',stayMinutes:p.stayMinutes,arrivalAt:new Date(arrived).toISOString(),startVisitAt:new Date(begin).toISOString(),departureAt:new Date(cursor).toISOString(),legMinutes:Math.round(leg),warning,status:'planned',...(p.parking?{parking:structuredClone(p.parking)}:{}),...(p.admission?{admission:structuredClone(p.admission)}:{}),...(p.navigationTarget?{navigationLatitude:destination.latitude,navigationLongitude:destination.longitude,navigationName:destination.name,navigationAddress:destination.address,arrivalTarget:'parking'}:{})});
     previous=destination;
   }
   return {stops,straightKm:Number(km.toFixed(1)),waitMinutes:Math.round(waitMinutes),violations,popularityDelay,warnings:[...new Set(warnings)],finishAt:new Date(cursor).toISOString()};
 }
-export async function suggestCourses({places,origin,startAt=new Date().toISOString(),maxStops=4,assumedMinutes=20,roadProvider,comparison}){
+export async function suggestCourses({places,origin,startAt=new Date().toISOString(),maxStops=4,assumedMinutes=20,roadProvider,comparison,drivingModes=['time','distance']}){
   if(!validPoint(origin))throw Error('현재 위치 또는 직접 확인한 출발 좌표가 필요합니다.');
   if(!Number.isFinite(Date.parse(startAt)))throw Error('출발 일시를 확인해 주세요.');
   if(!Number.isInteger(maxStops)||maxStops<1||maxStops>5)throw Error('방문 장소 수는 1~5곳으로 선택하세요.');
@@ -54,7 +54,8 @@ export async function suggestCourses({places,origin,startAt=new Date().toISOStri
   if(required.length>maxStops)throw Error('필수 방문지가 방문 개수보다 많아요. 개수를 늘리거나 필수 표시를 줄여주세요.');
   const chosen=[...required,...usable.filter(p=>!p.mustVisit).sort((a,b)=>b.votes-a.votes||a.createdAt-b.createdAt)].slice(0,maxStops);
   const driving=comparison==='driving',points=chosen.map(p=>p.navigationTarget||p),matrices={};
-  const strategies=driving?['time','distance']:['distance','preference'];
+  if(!Array.isArray(drivingModes)||!drivingModes.length||drivingModes.some(m=>!['time','distance'].includes(m)))throw Error('경로 비교 기준을 확인해 주세요.');
+  const strategies=driving?drivingModes:['distance','preference'];
   if(roadProvider?.matrix){
     if(driving)await Promise.all(strategies.map(async mode=>{try{matrices[mode]=await roadProvider.matrix(origin,points,mode);}catch{}}));
     else try{matrices.distance=matrices.preference=await roadProvider.matrix(origin,points);}catch{}
@@ -81,12 +82,12 @@ export async function suggestCourses({places,origin,startAt=new Date().toISOStri
     if(!matrix&&source==='kakao-road')warnings.push('방문 순서는 직선 동선으로 비교했고 선택 순서의 도로시간만 확인했어요.');
     const parked=chosen.filter(p=>p.parking?.mode==='selected'),unknown=parked.filter(p=>p.parking.estimatedFee==null).length;
     const parkingSummary={selectedCount:parked.length,unassignedCount:chosen.length-parked.length,knownTotal:parked.reduce((sum,p)=>sum+(p.parking.estimatedFee??0),0),unknownCount:unknown};
-    if(parked.length)warnings.push('주차요금은 선택한 시간의 기본·추가요금만 계산했어요. 할인·일주차권과 주차장↔장소 이동시간은 포함하지 않아요.');
+    if(parked.length)warnings.push('주차요금은 선택한 시간·차량 조건의 예상 금액이에요. 확인된 감면만 반영하며 일주차권·주차장↔장소 이동시간은 포함하지 않아요.');
     const title=driving?(strategy==='time'?'이동시간 우선':'이동거리 우선'):(strategy==='distance'?(matrix?'이동·대기시간 적게':'이동 부담 적게'):'인기 장소 먼저');
     const reason=driving&&!matrix?'도로 구간 전체를 비교하지 못해 직선 동선으로 순서를 정했어요.':driving?(strategy==='time'?'선택한 장소와 주차장을 모두 거치며 조회된 이동·대기시간이 적은 순서예요.':'선택한 장소와 주차장을 모두 거치며 조회된 도로 구간의 거리 합이 짧은 순서예요.'):(strategy==='distance'?'필수 장소와 상위 득표 장소를 포함하고 이동 부담이 적은 방문 순서예요.':'같은 방문 후보 중 득표가 많은 장소를 먼저 방문해요.');
     courses.push({id:randomUUID(),strategy,title,reason,engine:'constraint-search',comparison:driving?'driving':'legacy',sequenceSource:matrix?'kakao-road-matrix':'straight-line',origin,startAt,createdAt:new Date().toISOString(),timingSource:source,assumedMinutes,roadDistanceKm:roadSummary?Number((roadSummary.distance/1000).toFixed(1)):null,roadMinutes:roadSummary?Math.round(roadSummary.duration/60):null,...Object.fromEntries(Object.entries(result).filter(([k])=>!['order','popularityDelay','roadSeconds','roadDistance'].includes(k))),parkingSummary,warnings:[...warnings,...result.warnings]});
   }
-  if(courses[0].stops.map(p=>p.placeId).join()===courses[1].stops.map(p=>p.placeId).join())courses[1].reason+=' 두 기준의 방문 순서가 같아요.';
+  if(courses[1]&&courses[0].stops.map(p=>p.placeId).join()===courses[1].stops.map(p=>p.placeId).join())courses[1].reason+=' 두 기준의 방문 순서가 같아요.';
   return courses;
 }
 export function kakaoRoadProvider(key,fetcher=fetch){

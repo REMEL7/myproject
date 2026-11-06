@@ -23,6 +23,8 @@ object MoagilBrand {
     val ink get()=if(night)Color.rgb(237,243,248) else Color.rgb(25,43,62)
     val secondary get()=if(night)Color.rgb(174,191,205) else Color.rgb(96,109,120)
     val line get()=if(night)Color.rgb(58,76,91) else Color.rgb(223,229,231)
+    val popupBorder get()=if(night)Color.rgb(125,145,165) else Color.rgb(148,166,184)
+    val popupHeader get()=if(night)Color.rgb(25,37,50) else Color.WHITE
 }
 
 /** A G-shaped route and forward arrow, drawn without bitmap scaling. */

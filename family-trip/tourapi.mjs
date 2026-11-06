@@ -2,6 +2,11 @@ import {distanceKm,validPoint} from './planner.mjs';
 
 const plain=value=>String(value??'').replace(/<br\s*\/?\s*>/gi,'\n').replace(/<[^>]*>/g,'').replace(/&nbsp;/gi,' ').replace(/&amp;/gi,'&').replace(/&lt;/gi,'<').replace(/&gt;/gi,'>').trim().slice(0,2400);
 const nameKey=value=>plain(value).normalize('NFKC').replace(/[^\p{L}\p{N}]/gu,'').toLowerCase();
+const tourismNames=value=>{
+ const title=plain(value).replace(/\[(?:유네스코|UNESCO)[^\]]*\]/gi,'').trim();
+ return [nameKey(title),nameKey(title.replace(/(?:과|및)\s*후원$/,''))];
+};
+const addressKey=value=>plain(value).replace(/\([^)]*\)/g,'').replace(/특별자치시|특별자치도|특별시|광역시/g,'').replace(/[^\p{L}\p{N}-]/gu,'');
 const items=data=>{const value=data?.response?.body?.items?.item;return Array.isArray(value)?value:value&&typeof value==='object'?[value]:[];};
 const fields={
  '12':{hours:'usetime',rest:'restdate',parking:'parking'},
@@ -35,7 +40,16 @@ export function tourApiProvider(key,fetcher=fetch,now=Date.now){
   if(!validPoint(place))throw Error('장소 좌표를 확인해 주세요.');
   const queryName=place.info?.sourceName||place.name,names=new Set([nameKey(queryName),nameKey(place.name)].filter(Boolean));
   const nearby=await request('locationBasedList2',{mapX:String(place.longitude),mapY:String(place.latitude),radius:'300',arrange:'E'});
-  const matchRows=rows=>rows.filter(c=>/^\d+$/.test(String(c.contentid))&&fields[String(c.contenttypeid)]&&names.has(nameKey(c.title))&&validPoint({latitude:Number(c.mapy),longitude:Number(c.mapx)})&&distanceKm(place,{latitude:Number(c.mapy),longitude:Number(c.mapx)})<=.15);
+  const matchRows=rows=>rows.filter(c=>{
+   if(!/^\d+$/.test(String(c.contentid))||!fields[String(c.contenttypeid)]||!validPoint({latitude:Number(c.mapy),longitude:Number(c.mapx)}))return false;
+   const expected={food:['39'],cafe:['39'],stay:['32'],trip:['12','14','28']}[place.category];
+   if(expected&&!expected.includes(String(c.contenttypeid)))return false;
+   const sameName=tourismNames(c.title).some(n=>names.has(n));if(!sameName)return false;
+   const meters=distanceKm(place,{latitude:Number(c.mapy),longitude:Number(c.mapx)});
+   const address=addressKey(place.address),sameAddress=address.length>=8&&address===addressKey(c.addr1);
+   const largeSite=place.category==='trip'&&['12','14','28'].includes(String(c.contenttypeid))&&sameAddress;
+   return meters<=(largeSite ? .5 : .15);
+  });
   let matches=matchRows(nearby);
   if(!matches.length){const found=await request('searchKeyword2',{keyword:queryName});matches=matchRows(found);}
   matches=[...new Map(matches.map(c=>[String(c.contentid),c])).values()];
@@ -48,7 +62,7 @@ export function tourApiProvider(key,fetcher=fetch,now=Date.now){
   return normalizeVisitInfo(candidate,intro[0],repeated,now);
  };
  return async place=>{
-  const cacheKey=[place.info?.sourceName||place.name,place.latitude,place.longitude].join('|'),cached=cache.get(cacheKey);
+  const cacheKey=[place.info?.sourceName||place.name,place.latitude,place.longitude,addressKey(place.address),place.category||''].join('|'),cached=cache.get(cacheKey);
   if(cached&&now()-cached.at<86400000)return cached.result;
   if(pending.has(cacheKey))return pending.get(cacheKey);
   const job=lookup(place).then(result=>{if(cache.size>=500)cache.delete(cache.keys().next().value);cache.set(cacheKey,{at:now(),result});return result;}).finally(()=>pending.delete(cacheKey));pending.set(cacheKey,job);return job;

@@ -14,7 +14,11 @@ function color(name,night){
 const luminance=rgb=>rgb.map(v=>v/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4).reduce((a,v,i)=>a+v*[.2126,.7152,.0722][i],0);
 const ratio=(a,b)=>{const x=luminance(a),y=luminance(b);return (Math.max(x,y)+.05)/(Math.min(x,y)+.05);};
 test('actual Android day/night palette keeps core text and actions at least 4.5:1',()=>{
- for(const night of [false,true])for(const [fg,bg] of [['ink','background'],['ink','surface'],['secondary','background'],['secondary','surface'],['navy','surface'],['onAccent','navy'],['danger','surface'],['warning','surface'],['secondary','mist']]){
+ for(const night of [false,true])for(const [fg,bg] of [['ink','background'],['ink','surface'],['ink','popupHeader'],['navy','popupHeader'],['secondary','background'],['secondary','surface'],['navy','surface'],['onAccent','navy'],['danger','surface'],['warning','surface'],['secondary','mist']]){
   const value=ratio(color(fg,night),color(bg,night));assert.ok(value>=4.5,`${night?'night':'day'} ${fg}/${bg}: ${value.toFixed(2)}`);
  }
+});
+test('popup keeps a subtle light-mode edge and a clear dark-mode boundary',()=>{
+ assert.ok(ratio(color('popupBorder',false),color('surface',false))>=1.5);
+ assert.ok(ratio(color('popupBorder',true),color('surface',true))>=3);
 });

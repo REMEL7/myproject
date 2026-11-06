@@ -8,6 +8,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
@@ -48,6 +49,23 @@ class CupertinoSheetBuilder(private val activity:Activity,private val canAct:()-
     fun show():AlertDialog=create().also{it.show()}
 }
 
+/** Draw the outline last so opaque child views cannot cover its curved corners. */
+private class CupertinoPanel(context:Context,private val centered:Boolean):LinearLayout(context){
+    private val border=Paint(Paint.ANTI_ALIAS_FLAG).apply{style=Paint.Style.STROKE;strokeJoin=Paint.Join.ROUND}
+    private val outline=Path()
+    override fun dispatchDraw(canvas:Canvas){
+        super.dispatchDraw(canvas)
+        val stroke=maxOf(1,context.u(1)).toFloat()
+        val inset=stroke/2f+.5f
+        if(width<=inset*2||height<=inset*2)return
+        val radius=(context.u(18)-inset).coerceAtLeast(0f)
+        val corners=if(centered)FloatArray(8){radius} else floatArrayOf(radius,radius,radius,radius,0f,0f,0f,0f)
+        outline.reset();outline.addRoundRect(RectF(inset,inset,width-inset,height-inset),corners,Path.Direction.CW)
+        border.color=MoagilBrand.popupBorder;border.strokeWidth=stroke
+        canvas.drawPath(outline,border)
+    }
+}
+
 private class CupertinoSheet(
     private val activity:Activity,private val heading:String,private val message:String,private val body:View?,
     private val options:Array<String>?,private val selected:Int,private val single:Boolean,
@@ -61,7 +79,8 @@ private class CupertinoSheet(
     }
     private fun actionButton(which:Int,toolbar:Boolean=false):Button{
         val action=actions.getValue(which)
-        return Button(context).apply{
+        return object:Button(context){override fun setEnabled(enabled:Boolean){super.setEnabled(enabled);alpha=if(enabled)1f else .4f}
+            override fun setPressed(pressed:Boolean){super.setPressed(pressed);alpha=if(!isEnabled).4f else if(pressed).7f else 1f}}.apply{
             text=action.first;textSize=26f;isAllCaps=false;includeFontPadding=false
             typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL)
             setTextColor(if(action.first in setOf("삭제","종료"))MoagilBrand.danger else accent)
@@ -69,34 +88,40 @@ private class CupertinoSheet(
             minWidth=0;minimumWidth=0;minHeight=context.u(48);minimumHeight=context.u(48)
             setPadding(context.u(10),context.u(8),context.u(10),context.u(8))
             if(centered){
-                textSize=32f;minHeight=context.u(72);minimumHeight=context.u(72)
+                textSize=28f;minHeight=context.u(56);minimumHeight=context.u(56);maxLines=1;setAutoSizeTextTypeUniformWithConfiguration(18,28,1,android.util.TypedValue.COMPLEX_UNIT_SP)
                 val destructive=action.first in setOf("삭제","종료")
                 val emphasized=which==DialogInterface.BUTTON_POSITIVE
-                background=GradientDrawable().apply{setColor(if(emphasized)if(destructive)MoagilBrand.danger else accent else MoagilBrand.mist);cornerRadius=context.u(14).toFloat()}
+                background=GradientDrawable().apply{setColor(if(emphasized)if(destructive)MoagilBrand.danger else accent else MoagilBrand.mist);cornerRadius=context.u(12).toFloat()}
                 setTextColor(if(emphasized)if(destructive&&MoagilBrand.night)MoagilBrand.background else MoagilBrand.onAccent else accent)
             }
-            if(toolbar){textSize=28f;minHeight=context.u(48);minimumHeight=context.u(48);background=ColorDrawable(Color.TRANSPARENT);setTextColor(accent)}
+            if(toolbar){textSize=26f;minHeight=context.u(44);minimumHeight=context.u(44);background=ColorDrawable(Color.TRANSPARENT);setTextColor(accent)}
             setOnClickListener{if(which!=DialogInterface.BUTTON_NEGATIVE && !canAct())return@setOnClickListener;action.second?.onClick(this@CupertinoSheet,which);dismiss()}
         }.also{controls[which]=it}
     }
+    override fun cancel(){
+        // Back and outside taps follow the same return path as the visible cancel/back button.
+        val back=controls[DialogInterface.BUTTON_NEGATIVE]
+        if(isShowing&&back!=null){back.performClick();return}
+        super.cancel()
+    }
     override fun onCreate(state:Bundle?){
         super.onCreate(state)
-        val root=LinearLayout(context).apply{
+        val root=CupertinoPanel(context,centered).apply{
             orientation=LinearLayout.VERTICAL
             background=GradientDrawable().apply{
-                setColor(MoagilBrand.surface);val radius=context.u(22).toFloat();cornerRadii=if(centered)FloatArray(8){radius} else floatArrayOf(radius,radius,radius,radius,0f,0f,0f,0f)
+                setColor(MoagilBrand.surface);val radius=context.u(18).toFloat();cornerRadii=if(centered)FloatArray(8){radius} else floatArrayOf(radius,radius,radius,radius,0f,0f,0f,0f)
             }
             clipToOutline=true;isFocusableInTouchMode=true
         }
         if(!centered)root.addView(View(context).apply{background=GradientDrawable().apply{setColor(Color.rgb(205,207,215));cornerRadius=context.u(2).toFloat()}},
             LinearLayout.LayoutParams(context.u(34),context.u(4)).apply{gravity=Gravity.CENTER_HORIZONTAL;topMargin=context.u(8);bottomMargin=context.u(5)})
-        val bar=LinearLayout(context).apply{gravity=Gravity.CENTER_VERTICAL;setPadding(context.u(7),0,context.u(7),0)}
-        if(wide&&centered&&actions.containsKey(DialogInterface.BUTTON_NEGATIVE))bar.addView(actionButton(DialogInterface.BUTTON_NEGATIVE,true),LinearLayout.LayoutParams(context.u(90),context.u(56)))
+        val bar=LinearLayout(context).apply{gravity=Gravity.CENTER_VERTICAL;setPadding(context.u(7),0,context.u(7),0);setBackgroundColor(MoagilBrand.popupHeader)}
+        if(wide&&centered&&actions.containsKey(DialogInterface.BUTTON_NEGATIVE))bar.addView(actionButton(DialogInterface.BUTTON_NEGATIVE,true),LinearLayout.LayoutParams(context.u(80),context.u(48)))
         if(!centered)actions[DialogInterface.BUTTON_NEGATIVE]?.let{bar.addView(actionButton(DialogInterface.BUTTON_NEGATIVE),LinearLayout.LayoutParams(-2,-2))}
-        bar.addView(text(heading,32f).apply{
+        bar.addView(text(heading,30f).apply{
             gravity=Gravity.CENTER;typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL);maxLines=if(centered)2 else 1;ellipsize=android.text.TextUtils.TruncateAt.END
-        },LinearLayout.LayoutParams(0,context.u(if(centered)64 else 52),1f))
-        if(wide&&centered&&actions.containsKey(DialogInterface.BUTTON_NEGATIVE))bar.addView(View(context),LinearLayout.LayoutParams(context.u(90),1))
+        },LinearLayout.LayoutParams(0,context.u(52),1f))
+        if(wide&&centered&&actions.containsKey(DialogInterface.BUTTON_NEGATIVE))bar.addView(View(context),LinearLayout.LayoutParams(context.u(80),1))
         if(!centered)actions[DialogInterface.BUTTON_POSITIVE]?.let{bar.addView(actionButton(DialogInterface.BUTTON_POSITIVE),LinearLayout.LayoutParams(-2,-2))}
         root.addView(bar)
         root.addView(View(context).apply{setBackgroundColor(MoagilBrand.line)},LinearLayout.LayoutParams(-1,1))
@@ -115,30 +140,31 @@ private class CupertinoSheet(
         }
         val screenHeight=activity.window.decorView.height.takeIf{it>0} ?: (activity.resources.configuration.screenHeightDp*activity.resources.displayMetrics.density).toInt()
         val footerKeys=listOf(DialogInterface.BUTTON_NEUTRAL,DialogInterface.BUTTON_POSITIVE,DialogInterface.BUTTON_NEGATIVE).filter{actions.containsKey(it)&&(!wide||it!=DialogInterface.BUTTON_NEGATIVE)}
-        val maxHeight=if(wide&&centered)(screenHeight-context.u(64+12+32+(if(footerKeys.isEmpty())0 else 22+footerKeys.size*72+(footerKeys.size-1)*10))).coerceAtLeast(context.u(80)) else if(centered)minOf((screenHeight*(if(actions.size<=1).70 else .48)).toInt(),(screenHeight-context.u(110+actions.size*82)).coerceAtLeast(context.u(60))) else (screenHeight*.68).toInt()
+        val maxHeight=if(wide&&centered)(screenHeight-context.u(52+10+32+(if(footerKeys.isEmpty())0 else 16+footerKeys.size*56+(footerKeys.size-1)*8))).coerceAtLeast(context.u(80)) else if(centered)minOf((screenHeight*(if(actions.size<=1).70 else .48)).toInt(),(screenHeight-context.u(110+actions.size*82)).coerceAtLeast(context.u(60))) else (screenHeight*.68).toInt()
         val scroll=object:ScrollView(context){
             override fun onMeasure(widthSpec:Int,heightSpec:Int){super.onMeasure(widthSpec,MeasureSpec.makeMeasureSpec(maxHeight,MeasureSpec.AT_MOST))}
         }.apply{addView(content);isFillViewport=false;isVerticalScrollBarEnabled=centered;isScrollbarFadingEnabled=!centered;clipToPadding=false}
         root.addView(scroll,LinearLayout.LayoutParams(-1,-2))
         if(centered&&footerKeys.isNotEmpty()){
-            val footer=LinearLayout(context).apply{orientation=LinearLayout.VERTICAL;setPadding(context.u(20),context.u(14),context.u(20),context.u(8))}
+            val footer=LinearLayout(context).apply{orientation=LinearLayout.VERTICAL;setPadding(context.u(20),context.u(8),context.u(20),context.u(6))}
             footerKeys.forEachIndexed{i,key->
-                footer.addView(actionButton(key),LinearLayout.LayoutParams(-1,context.u(72)).apply{if(i>0)topMargin=context.u(10)})
+                val availableWidth=minOf(context.u(if(wide)660 else 540),(activity.resources.configuration.screenWidthDp*activity.resources.displayMetrics.density).toInt()-context.u(32))-context.u(40)
+                footer.addView(actionButton(key),LinearLayout.LayoutParams(if(wide&&footerKeys.size==1)minOf(context.u(300),availableWidth) else -1,context.u(56)).apply{gravity=Gravity.END;if(i>0)topMargin=context.u(8)})
             }
             root.addView(footer)
         }else actions[DialogInterface.BUTTON_NEUTRAL]?.let{root.addView(actionButton(DialogInterface.BUTTON_NEUTRAL),LinearLayout.LayoutParams(-1,-2))}
-        root.setPadding(0,0,0,context.u(12))
+        root.setPadding(context.u(1),context.u(1),context.u(1),context.u(10))
         setContentView(root);root.requestFocus()
         window?.apply{
             setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT));decorView.setPadding(0,0,0,0)
-            addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);setDimAmount(if(wide).46f else .18f);setWindowAnimations(0)
+            addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);setDimAmount(if(MoagilBrand.night).64f else .54f);setWindowAnimations(0)
             setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
         }
         if(!centered&&android.animation.ValueAnimator.areAnimatorsEnabled()){
             root.translationY=context.u(18).toFloat();root.animate().translationY(0f).setDuration(200).start()
         }
     }
-    override fun onStart(){super.onStart();window?.setGravity(if(centered)Gravity.CENTER else Gravity.BOTTOM);val width=if(centered)minOf(context.u(if(wide)760 else 600),(activity.resources.configuration.screenWidthDp*activity.resources.displayMetrics.density).toInt()-context.u(32)) else ViewGroup.LayoutParams.MATCH_PARENT;window?.setLayout(width,ViewGroup.LayoutParams.WRAP_CONTENT)}
+    override fun onStart(){super.onStart();window?.setGravity(if(centered)Gravity.CENTER else Gravity.BOTTOM);val width=if(centered)minOf(context.u(if(wide)660 else 540),(activity.resources.configuration.screenWidthDp*activity.resources.displayMetrics.density).toInt()-context.u(32)) else ViewGroup.LayoutParams.MATCH_PARENT;window?.setLayout(width,ViewGroup.LayoutParams.WRAP_CONTENT)}
     override fun getButton(whichButton:Int):Button=controls[whichButton] ?: super.getButton(whichButton)
 }
 

@@ -24,6 +24,15 @@ test('same-name distant and ambiguous branches are not attached',async()=>{
  }
 });
 
+test('large attractions require matching road addresses before extending the coordinate match',async()=>{
+ const palace={contentid:'777',contenttypeid:'12',title:'창덕궁과 후원 [유네스코 세계유산]',mapx:'127',mapy:'37.502',addr1:'서울특별시 종로구 율곡로 99 (와룡동)'};
+ const lookup=tourApiProvider('fixture',async url=>response(/locationBasedList2|searchKeyword2/.test(url)?[palace]:url.includes('detailIntro2')?[{contentid:'777',usetime:'09:00~18:00'}]:[{infoname:'입장료',infotext:'개인 3,000원'}]));
+ const p={name:'창덕궁',latitude:37.5,longitude:127,address:'서울 종로구 율곡로 99',category:'trip'};
+ assert.equal((await lookup(p)).status,'matched');
+ assert.equal((await lookup({...p,address:'서울 종로구 다른길 1'})).status,'not_found');
+ assert.equal((await lookup({...p,category:'food'})).status,'not_found');
+});
+
 test('fees and hotel check-in are distinct from opening hours',()=>{
  const museum=normalizeVisitInfo({...candidate,contenttypeid:'14'},{usefee:'성인 5,000원',usetimeculture:'09:00~18:00'},[{infoname:'관람료',infotext:'어린이 무료'}]);
  assert.match(museum.fees,/5,000원/);assert.match(museum.fees,/어린이 무료/);

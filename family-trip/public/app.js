@@ -2,7 +2,7 @@ const $=id=>document.getElementById(id);
 const params=new URLSearchParams(location.hash.slice(1));
 const room=params.get('room'),token=params.get('token');
 let config,currentRoom,map,markers=[],results=[],selected,online=false,searching=false,adding=false,refreshing=false,consented=false,accessLost=false,revision=-1,searchGeneration=0;
-let activeSavedId=null,savedScrollTimer;
+let activeSavedId=null,savedScrollTimer,searchController;
 const point=p=>p&&Number.isFinite(Number(p.latitude))&&Number.isFinite(Number(p.longitude))&&Math.abs(Number(p.latitude))<=90&&Math.abs(Number(p.longitude))<=180;
 const samePlace=(a,b)=>a.id&&b.id&&a.id===b.id||a.name===b.name&&Math.abs(Number(a.latitude)-Number(b.latitude))<.0001&&Math.abs(Number(a.longitude)-Number(b.longitude))<.0001;
 const places=()=>(currentRoom?.places||[]).filter(p=>!p.demo);
@@ -15,8 +15,8 @@ function showSuccessToast(text){
  successToastTimer=setTimeout(()=>{$('successToast').hidden=true;$('successToast').textContent='';},2800);
 }
 function connected(value){online=value;$('connection').textContent=value?'연결됨':'연결 확인 중';$('connection').classList.toggle('online',value);$('connection').setAttribute('aria-label',value?'차량에 연결됨':'차량 연결 확인 중');updateAddButton();}
-async function api(path='',data){
- const response=await fetch(`/api/rooms/${room}${path}`,{method:data?'POST':'GET',signal:AbortSignal.timeout(data?.action==='tourDetails'?35000:12000),headers:{Authorization:`Bearer ${token}`,...(data?{'Content-Type':'application/json'}:{})},...(data?{body:JSON.stringify(data)}:{})});
+async function api(path='',data,signal){
+ const response=await fetch(`/api/rooms/${room}${path}`,{method:data?'POST':'GET',signal:signal||AbortSignal.timeout(data?.action==='tourDetails'?35000:12000),headers:{Authorization:`Bearer ${token}`,...(data?{'Content-Type':'application/json'}:{})},...(data?{body:JSON.stringify(data)}:{})});
  const result=await response.json();
  if(!response.ok){if(response.status===403){accessLost=true;currentRoom=null;connected(false);$('placeSheet').close();showWelcome(true);renderPlaces();renderMarkers();}throw Object.assign(Error(result.error||'연결을 확인해 주세요.'),{status:response.status});}
  return result;
@@ -56,7 +56,7 @@ function scrollSaved(behavior='smooth'){
  track.scrollTo({left:card.offsetLeft-(track.clientWidth-card.offsetWidth)/2,behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':behavior});
 }
 function focusSaved(id,{scroll=true}={}){
- const p=places().find(p=>p.id===id);if(!p)return;activeSavedId=id;selected=p;updateSavedSelection();if(scroll)scrollSaved();renderMarkers();
+ const p=places().find(p=>p.id===id);if(!p)return;activeSavedId=id;if(!$('placeSheet').open)selected=p;updateSavedSelection();if(scroll)scrollSaved();renderMarkers();
  if(map&&point(p)){map.relayout();map.setLevel(3);map.panTo(new kakao.maps.LatLng(Number(p.latitude),Number(p.longitude)));}
 }
 function stepSaved(delta){const list=places(),index=list.findIndex(p=>p.id===activeSavedId);const next=list[index+delta];if(next)focusSaved(next.id);}
@@ -65,7 +65,7 @@ function renderResults(){
  if(!results.length)$('results').append(el('p','검색 결과가 없어요.\n지역이나 장소 이름을 바꿔보세요.','empty'));
 }
 function clearSearchResults(){
- ++searchGeneration;results=[];$('resultsPanel').hidden=true;$('results').replaceChildren();$('retrySearch').hidden=true;
+ ++searchGeneration;searchController?.abort();searching=false;$('searchButton').textContent='검색';$('searchButton').disabled=accessLost;results=[];$('resultsPanel').hidden=true;$('results').replaceChildren();$('retrySearch').hidden=true;
 }
 function updateAddButton(){
  if(!selected)return;
@@ -75,7 +75,7 @@ function updateAddButton(){
 }
 function openPlace(p){
  selected=existing(p)||p;p=selected;$('placeName').textContent=p.name;$('placeAddress').textContent=p.address||'주소 정보 없음';$('placeCategory').textContent=({food:'맛집',cafe:'카페',trip:'가볼 곳',stay:'숙소',other:'기타'})[categoryOf(p)];$('placeError').hidden=true;$('sharingConsent').checked=consented;updateAddButton();renderMarkers();
- renderPlaceInfo(p);if(map&&point(p)){map.panTo(new kakao.maps.LatLng(Number(p.latitude),Number(p.longitude)));map.setLevel(4);}
+ renderPlaceInfo(p);$('placeSheet').querySelector('.detail-body').scrollTop=0;if(map&&point(p)){map.panTo(new kakao.maps.LatLng(Number(p.latitude),Number(p.longitude)));map.setLevel(4);}
  if(!$('placeSheet').open)$('placeSheet').showModal();
 }
 function renderPlaceInfo(p){
@@ -106,7 +106,7 @@ function renderPlaceInfo(p){
     if(!result.items.length)area.append(el('p','이 반경에 등록된 주차정보가 없어요.','detail-empty'));
     const fee=(n)=>n==null?'미제공':n.toLocaleString('ko-KR')+'원';
     for(const item of result.items){
-     const card=el('article',undefined,'parking-card');card.append(el('h4',item.name+' · '+item.distanceMeters+'m'),el('p',item.address));
+     const card=el('details',undefined,'parking-card');const summary=el('summary');summary.append(el('span',item.name+' · '+item.distanceMeters+'m'),el('strong',item.feeType==='무료'?'무료':item.basicFee!=null&&item.basicMinutes!=null?`기본 ${item.basicMinutes}분 · ${fee(item.basicFee)}`:'요금 확인 필요'));card.append(summary,el('p',item.address));
      if(item.relation==='facility')card.append(el('small','공식 안내로 확인한 시설 주차장'));
      else if(item.relation==='facility_candidate')card.append(el('small','시설명으로 찾은 후보 · 전용·제휴 여부 확인 필요'));
      card.append(el('p',item.feeType==='무료'?'무료':`${item.feeType||'요금 구분 미제공'} · 기본 ${item.basicMinutes??'미제공'}분 / ${fee(item.basicFee)} · 추가 ${item.extraMinutes??'미제공'}분 / ${fee(item.extraFee)}`));
@@ -160,12 +160,12 @@ async function search(){
  if(searching||accessLost||!room||!token)return;
  const query=$('query').value.trim();if(query.length<2)return;
  if(!config?.searchEnabled){notice('장소 검색을 준비 중이에요. 차량에서 연결을 확인해 주세요.',true);return;}
- const generation=++searchGeneration;searching=true;$('searchButton').textContent='검색 중';$('searchButton').disabled=true;$('retrySearch').hidden=true;notice();
+ const generation=++searchGeneration;searchController?.abort();const controller=new AbortController();searchController=controller;const timeout=setTimeout(()=>controller.abort(),12000);searching=true;$('searchButton').textContent='검색 중';$('searchButton').disabled=true;$('retrySearch').hidden=true;notice();
  try{
-  const result=await api('/search?q='+encodeURIComponent(query));if(generation!==searchGeneration)return;
+  const result=await api('/search?q='+encodeURIComponent(query),undefined,controller.signal);if(generation!==searchGeneration)return;
   connected(true);results=result.places.filter(point);$('resultsTitle').textContent=`${query} · ${results.length}곳`;$('resultsPanel').hidden=false;renderResults();renderMarkers();fitPoints(results);
  }catch(error){if(generation===searchGeneration&&!accessLost){notice('검색이 잠시 안 돼요. 같은 검색어로 다시 시도해 주세요.',true);$('retrySearch').hidden=false;}}
- finally{searching=false;$('searchButton').textContent='검색';$('searchButton').disabled=accessLost;}
+ finally{clearTimeout(timeout);if(generation===searchGeneration){searching=false;$('searchButton').textContent='검색';$('searchButton').disabled=accessLost;}}
 }
 async function refresh(){
  if(refreshing||accessLost||!room||!token)return;refreshing=true;
@@ -189,13 +189,14 @@ async function setupMap(){
  }catch{$('mapHint').textContent='지도를 불러오지 못했어요. 검색으로 장소를 추가할 수 있어요.';}
 }
 $('searchForm').onsubmit=e=>{e.preventDefault();search();};$('retrySearch').onclick=search;
-$('query').oninput=()=>{++searchGeneration;$('retrySearch').hidden=true;};
+$('query').oninput=()=>{clearSearchResults();selected=null;renderMarkers();notice();};
 $('clearResults').onclick=()=>{clearSearchResults();selected=null;renderMarkers();notice();};
 $('fitMap').onclick=()=>fitPoints([...places(),...results]);
 $('zoomIn').onclick=()=>{if(map)map.setLevel(Math.max(1,map.getLevel()-1));};
 $('zoomOut').onclick=()=>{if(map)map.setLevel(Math.min(14,map.getLevel()+1));};
 $('addPlace').onclick=addPlace;$('closePlace').onclick=()=>$('placeSheet').close();
 $('placeSheet').addEventListener('cancel',e=>{if(adding)e.preventDefault();});
+$('placeSheet').addEventListener('click',e=>{if(e.target!==$('placeSheet')||adding)return;const r=e.target.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)e.target.close();});
 $('previousSaved').onclick=()=>stepSaved(-1);$('nextSaved').onclick=()=>stepSaved(1);
 $('savedDetails').onclick=()=>{const p=places().find(p=>p.id===activeSavedId);if(p)openPlace(p);};
 $('savedPlaces').onkeydown=e=>{if(e.key==='ArrowRight'||e.key==='ArrowLeft'){e.preventDefault();stepSaved(e.key==='ArrowRight'?1:-1);}};

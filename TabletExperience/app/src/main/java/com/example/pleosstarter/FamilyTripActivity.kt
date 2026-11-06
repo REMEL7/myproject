@@ -100,6 +100,7 @@ class FamilyTripActivity : Activity() {
     private var currentLocation: CurrentLocationInfo? = null
     private var locationReceivedAt = 0L
     private var locationRenderedAt = 0L
+    private var lastTouchAt = 0L
     private var pending: JSONObject? = null
     private var pendingWaypoints = emptyList<JSONObject>()
     private var destinationConfirmed = false
@@ -137,7 +138,7 @@ class FamilyTripActivity : Activity() {
         override fun onCurrentLocationInfo(currentLocationInfo: CurrentLocationInfo) { ui.post {
             currentLocation=currentLocationInfo;locationReceivedAt=android.os.SystemClock.elapsedRealtime()
             // Position updates must not rebuild focused course buttons and jump the scroll view.
-            if(activeTab=="home"&&locationReceivedAt-locationRenderedAt>10000){locationRenderedAt=locationReceivedAt;renderCards()}
+            if(activeTab=="home"&&cardsScroll.scrollY==0&&sheets.none{it.isShowing}&&locationReceivedAt-lastTouchAt>2000&&locationReceivedAt-locationRenderedAt>10000){locationRenderedAt=locationReceivedAt;renderCards()}
         } }
     }
 
@@ -153,7 +154,7 @@ class FamilyTripActivity : Activity() {
         joinToken = SessionStore.read(prefs,"joinToken")
         room = runCatching { JSONObject(prefs.getString("cachedRoom", "")!!) }.getOrNull()
         room?.remove("ownerToken");room?.remove("joinToken");room?.let{prefs.edit().putString("cachedRoom",it.toString()).apply()}
-        activeTab=savedInstanceState?.getString("activeTab")?.takeIf{it in setOf("home","places","course","settings")} ?: "home"
+        activeTab=savedInstanceState?.getString("activeTab")?.takeIf{it in setOf("home","places","course","settings")} ?: if(room?.optJSONObject("course")?.optString("status")=="active")"course" else "home"
         intent.getStringExtra(GleoActionActivity.TAB_EXTRA)?.takeIf{it in setOf("course","ballot")}?.let{activeTab=it}
         categoryFilter=savedInstanceState?.getString("categoryFilter")?.takeIf{it in setOf("all","food","cafe","trip","stay","other")} ?: "all"
         sortMode=savedInstanceState?.getString("sortMode")?.takeIf{it in setOf("recent","distance")} ?: "recent"
@@ -473,9 +474,9 @@ class FamilyTripActivity : Activity() {
         dialog().setView(ScrollView(this).apply{addView(content)}).setPositiveButton("확인",null).show()
     }
     private fun postRoom(action:String,data:JSONObject,failed:()->Unit={},done:(JSONObject)->Unit={}){
-        if(!canInteract())return
-        if(loading||pending!=null){Toast.makeText(this,"연결 또는 안내 요청이 끝난 뒤 다시 시도해 주세요",Toast.LENGTH_SHORT).show();return}
-        if(!connected){Toast.makeText(this,"모임 서버 연결을 확인해 주세요",Toast.LENGTH_SHORT).show();return}
+        if(!canInteract()){failed();return}
+        if(loading||pending!=null){failed();Toast.makeText(this,"처리 중이에요. 잠시 후 다시 눌러주세요",Toast.LENGTH_SHORT).show();return}
+        if(!connected){failed();Toast.makeText(this,"연결을 확인한 뒤 다시 눌러주세요",Toast.LENGTH_SHORT).show();return}
         val requestGeneration=sessionGeneration
         loading=true
         if(action=="plan")status.text="코스 계산 중… 잠시 기다려주세요"
@@ -527,6 +528,10 @@ class FamilyTripActivity : Activity() {
         val selected=linkedSetOf<String>()
         val parking=mutableMapOf<String,JSONObject>()
         val course=room?.optJSONObject("course")
+        val admissions=mutableMapOf<String,JSONObject>();val admissionOverrides=mutableMapOf<String,Int>()
+        var adultCount=if(remaining)course?.optInt("adultCount",1) ?: 1 else 1
+        var preferredStrategy=if(remaining)course?.optString("strategy","time") ?: "time" else "time"
+        var preparedKey="";var preparing=false;var prepareFailed=false;var setupPage="places"
         val completed=mutableSetOf<String>()
         if(remaining&&course!=null){
             val stops=course.getJSONArray("stops");val next=course.optInt("nextIndex")
@@ -535,33 +540,39 @@ class FamilyTripActivity : Activity() {
                 if(i<next){completed.add(id);continue}
                 if(places.none{it.getString("id")==id})continue
                 selected.add(id)
-                stop.optJSONObject("parking")?.takeIf{it.optString("mode")=="selected"}?.let{
-                    parking[id]=JSONObject(it.toString()).put("parkingId",it.getString("id"))
-                }
+                stop.optJSONObject("parking")?.let{parking[id]=JSONObject(it.toString()).apply{if(it.optString("mode")=="selected")put("parkingId",it.getString("id"))}}
+                stop.optJSONObject("admission")?.takeIf{it.optString("status")=="manual"}?.let{admissionOverrides[id]=it.getInt("unitAmount")}
             }
         }
         val available=places.filter{!completed.contains(it.getString("id"))}
         var origin=validLocation()?.let{JSONObject().put("latitude",it.latitude).put("longitude",it.longitude).put("name","현재 위치")}
-        var editor:AlertDialog?=null
+        var editor:AlertDialog?=null;var editorHost:LinearLayout?=null;var editorTitle=""
+        lateinit var compareCourse:()->Unit
         lateinit var choosePlaces:()->Unit
         lateinit var chooseParking:()->Unit
         fun open(title:String,body:LinearLayout,next:String,onNext:()->Unit,back:String="취소",onBack:()->Unit={}){
+            if(editor?.isShowing==true&&editorTitle==title){
+                editorHost?.apply{removeAllViews();addView(body)}
+                editor?.getButton(AlertDialog.BUTTON_POSITIVE)?.apply{text=next;setOnClickListener{if(canInteract())onNext()}}
+                return
+            }
             editor?.dismiss()
-            val form=coursePopup().setTitle(title).setView(body).setNegativeButton(back){_,_->onBack()}.setPositiveButton(next,null).create()
-            editor=form;form.show();form.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{if(canInteract())onNext()}
+            val host=column().apply{addView(body)}
+            val form=coursePopup().setTitle(title).setView(host).setNegativeButton(back){_,_->onBack()}.setPositiveButton(next,null).create()
+            editor=form;editorHost=host;editorTitle=title;form.show();form.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{if(canInteract())onNext()}
         }
-        fun pickOrigin(){
-            editor?.dismiss()
+        fun pickOrigin(afterPick:()->Unit={chooseParking()}){
+            editor?.dismiss();setupPage="origin"
             val content=courseColumn()
             val options=mutableListOf<Pair<String,JSONObject>>()
             validLocation()?.let{options.add("현재 위치" to JSONObject().put("latitude",it.latitude).put("longitude",it.longitude).put("name","현재 위치"))}
             places.forEach{p->options.add(p.getString("name") to JSONObject().put("latitude",p.getDouble("latitude")).put("longitude",p.getDouble("longitude")).put("name",p.getString("name")))}
             lateinit var popup:AlertDialog
-            content.addView(label("어디서 출발하나요?",20,ink))
-            options.forEach{(name,point)->content.addView(choiceRow(name,if(name=="현재 위치")"차량에서 받은 위치" else "저장한 장소",action={origin=point;popup.dismiss();chooseParking()}).apply{minimumHeight=dp(72)})}
-            popup=coursePopup().setTitle("출발지 선택").setView(content).setNegativeButton("뒤로"){_,_->chooseParking()}.create();popup.show()
+            options.forEach{(name,point)->content.addView(choiceRow(name,if(name=="현재 위치")"차량에서 받은 위치" else "저장한 장소",action={origin=point;popup.dismiss();afterPick()}).apply{minimumHeight=dp(56)})}
+            popup=coursePopup().setTitle("출발지 선택").setView(content).setNegativeButton("이전"){_,_->chooseParking()}.create();popup.show()
         }
         choosePlaces={
+            setupPage="places";prepareFailed=false
             val body=courseColumn().apply{setPadding(dp(22),dp(8),dp(22),dp(10))}
             val count=label("${selected.size}곳 선택 · 최대 5곳",18,mint)
             body.addView(count)
@@ -574,59 +585,160 @@ class FamilyTripActivity : Activity() {
                     val text=column();text.addView(label(p.getString("name"),19,ink));text.addView(label(p.optString("address"),13,muted))
                     row.addView(text,LinearLayout.LayoutParams(0,-2,1f))
                     row.addView(label(if(selected.contains(id))"✓" else "+",24,mint))
-                    row.background=surface(if(selected.contains(id))soft else MoagilBrand.background,14)
+                    row.background=surface(if(selected.contains(id))soft else Color.TRANSPARENT,12)
                 }
-                row=LinearLayout(this).apply{gravity=Gravity.CENTER_VERTICAL;minimumHeight=dp(72);setPadding(dp(16),dp(10),dp(16),dp(10));isClickable=true;isFocusable=true;contentDescription="코스 장소 선택 ${p.getString("name")}";setOnClickListener{
+                row=LinearLayout(this).apply{gravity=Gravity.CENTER_VERTICAL;minimumHeight=dp(60);setPadding(dp(16),dp(10),dp(16),dp(10));isClickable=true;isFocusable=true;contentDescription="코스 장소 선택 ${p.getString("name")}";setOnClickListener{
                     if(!canInteract())return@setOnClickListener
                     if(selected.contains(id)){selected.remove(id);parking.remove(id)}else if(selected.size<5)selected.add(id)else{Toast.makeText(this@FamilyTripActivity,"한 코스에 최대 5곳까지 선택할 수 있어요.",Toast.LENGTH_SHORT).show();return@setOnClickListener}
-                    count.text="${selected.size}곳 선택 · 최대 5곳";draw()
+                    count.text="${selected.size}곳 선택 · 최대 5곳";preparedKey="";editor?.getButton(AlertDialog.BUTTON_POSITIVE)?.isEnabled=selected.isNotEmpty();draw()
                 }}
-                draw();rows.addView(row,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(8)})
+                draw();rows.addView(row,LinearLayout.LayoutParams(-1,-2));separator(rows)
             }
-            open("1 · 장소 선택",body,"주차 선택",{
+            open("1/3 · 장소 선택",body,"다음",{
                 if(selected.isEmpty())Toast.makeText(this,"장소를 한 곳 이상 선택해 주세요.",Toast.LENGTH_SHORT).show() else chooseParking()
             })
+            editor?.getButton(AlertDialog.BUTTON_POSITIVE)?.isEnabled=selected.isNotEmpty()
+        }
+        fun selections():JSONObject{
+            val result=JSONObject()
+            selected.forEach{id->parking[id]?.let{p->
+                if(p.optString("mode")=="selected")result.put(id,JSONObject().put("parkingId",p.optString("parkingId",p.optString("id"))).put("minutes",p.optInt("minutes",60)).put("selectionSource",p.optString("selectionSource","user")))
+                else if(p.optString("selectionSource")=="user")result.put(id,JSONObject().put("mode","none"))
+            }}
+            return result
+        }
+        fun overrides()=JSONObject().apply{selected.forEach{id->admissionOverrides[id]?.let{put(id,it)}}}
+        fun setupPayload()=JSONObject().put("placeIds",org.json.JSONArray(selected.toList())).put("parkingSelections",selections()).put("vehicle",currentParkingVehicle()).put("adultCount",adultCount).put("admissionOverrides",overrides())
+        fun editPeople(){
+            editor?.dismiss();setupPage="conditions"
+            val body=courseColumn();var count=adultCount
+            body.addView(label("관람료를 계산할 성인 인원",19,ink))
+            val row=LinearLayout(this).apply{gravity=Gravity.CENTER_VERTICAL};val value=priceLabel("${count}명",26)
+            row.addView(softButton("−"){if(count>1){count--;value.text="${count}명"}},LinearLayout.LayoutParams(dp(80),dp(64)))
+            row.addView(value,LinearLayout.LayoutParams(0,dp(64),1f));value.gravity=Gravity.CENTER
+            row.addView(softButton("+"){if(count<20){count++;value.text="${count}명"}},LinearLayout.LayoutParams(dp(80),dp(64)));body.addView(row)
+            body.addView(label("주차료는 차량 1대, 관람료는 성인 인원 기준이에요. 어린이·청소년과 개별 감면은 별도로 확인해 주세요.",14,muted))
+            lateinit var popup:AlertDialog
+            popup=coursePopup().setTitle("비용 기준").setView(body).setNegativeButton("취소"){_,_->chooseParking()}.setPositiveButton("적용"){_,_->adultCount=count;preparedKey="";chooseParking()}.create();popup.show()
+        }
+        fun editAdmission(place:JSONObject){
+            editor?.dismiss();setupPage="conditions"
+            val id=place.getString("id");val admission=admissions[id];val body=courseColumn()
+            body.addView(label(place.getString("name"),23,ink))
+            val raw=admission?.optString("raw").orEmpty()
+            body.addView(label(if(raw.isBlank())"제공된 관람료가 없어요. 확인한 성인 요금을 입력할 수 있어요." else raw,15,muted))
+            if(admission?.optString("provider")?.isNotBlank()==true)body.addView(label("자료: ${admission.optString("provider")}",12,muted))
+            body.addView(label("성인 1명 요금 · 무료는 0원 · 비우면 제공 요금 사용",16,ink))
+            val value=textInput(admissionOverrides[id]?.toString() ?: "","확인한 금액",true).apply{inputType=android.text.InputType.TYPE_CLASS_NUMBER}
+            body.addView(value)
+            lateinit var popup:AlertDialog
+            popup=coursePopup().setTitle("관람료 확인").setView(body).setNegativeButton("뒤로"){_,_->chooseParking()}.setPositiveButton("입력한 요금 적용",null).create();popup.show()
+            popup.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{
+                val typed=value.text.toString().trim()
+                if(typed.isEmpty()){admissionOverrides.remove(id);preparedKey="";popup.dismiss();chooseParking();return@setOnClickListener}
+                val amount=typed.toIntOrNull()
+                if(amount==null||amount !in 0..1000000){Toast.makeText(this,"0~1,000,000원으로 입력해 주세요.",Toast.LENGTH_SHORT).show();return@setOnClickListener}
+                admissionOverrides[id]=amount;preparedKey="";popup.dismiss();chooseParking()
+            }
+        }
+        compareCourse={
+            val point=origin
+            if(point!=null){
+                if(!loading&&pending==null&&connected){
+                    val shown=editor;setupPage="calculating"
+                    shown?.getButton(AlertDialog.BUTTON_POSITIVE)?.apply{text="비교 중…";isEnabled=false}
+                    postRoom("plan",setupPayload().put("origin",point).put("startAt",java.time.Instant.now().toString()).put("assumedMinutes",20).put("remainingOnly",remaining),failed={if(setupPage=="calculating")chooseParking()}){
+                        if(setupPage=="calculating"){setupPage="comparison";shown?.dismiss();showCourseComparison(it,preferredStrategy,{preferredStrategy=it}){chooseParking()}}
+                    }
+                }else{Toast.makeText(this,"서버 연결과 진행 중인 요청을 확인해 주세요.",Toast.LENGTH_SHORT).show();chooseParking()}
+            }
         }
         chooseParking={
+            setupPage="parking"
+            val key=selected.joinToString()+"|"+adultCount+"|"+currentParkingVehicle().toString()+"|"+overrides().toString()
+            val needsPrepare=preparedKey!=key&&!prepareFailed
             val body=courseColumn()
-            body.addView(choiceRow("출발 · ${origin?.optString("name") ?: "출발지 선택"}","지금 출발",action={pickOrigin()}).apply{background=surface(soft,14);setPadding(dp(16),dp(8),dp(16),dp(8))})
-            body.addView(label("${parkingVehicleLabel(currentParkingVehicle().optString("type"))} 기준 · 주차장을 지정하지 않아도 돼요.",15,muted).apply{setPadding(0,dp(14),0,dp(8))})
+            val busy=preparing||needsPrepare
+            val settings=LinearLayout(this).apply{orientation=if(slimScreen)LinearLayout.VERTICAL else LinearLayout.HORIZONTAL}
+            settings.addView(choiceRow("출발 · ${origin?.optString("name") ?: "선택"}",trailing="›",action={if(!busy)pickOrigin()}).apply{isEnabled=!busy},if(slimScreen)LinearLayout.LayoutParams(-1,-2)else LinearLayout.LayoutParams(0,-2,1f).apply{rightMargin=dp(22)})
+            settings.addView(choiceRow("성인 ${adultCount}명 · 차량 1대",trailing="›",action={if(!busy)editPeople()}).apply{isEnabled=!busy},if(slimScreen)LinearLayout.LayoutParams(-1,-2)else LinearLayout.LayoutParams(0,-2,1f))
+            body.addView(settings)
+            if(busy)body.addView(label("가까운 주차장과 관람료를 확인하고 있어요…",15,muted))
+            if(prepareFailed)body.addView(softButton("정보 다시 확인"){prepareFailed=false;chooseParking()})
             selected.forEachIndexed{i,id->
                 val p=available.first{it.getString("id")==id};val chosen=parking[id]
-                val priorVehicle=chosen?.optJSONObject("vehicle");val currentVehicle=currentParkingVehicle()
-                val sameVehicle=priorVehicle?.optString("type")==currentVehicle.optString("type")&&priorVehicle?.optBoolean("diesel")==currentVehicle.optBoolean("diesel")
-                val detail=if(chosen==null)"주차장 지정 안 함" else "${chosen.optString("name")} · ${chosen.optInt("minutes",60)}분 "+if(sameVehicle)parkingFeeLabel(chosen)else "요금 다시 계산 예정"
-                body.addView(choiceRow("${i+1}. ${p.getString("name")}",detail,action={
-                    editor?.dismiss();showCourseParkingPicker(p,chosen,{choice->if(choice==null)parking.remove(id)else parking[id]=choice;chooseParking()},{chooseParking()})
-                }).apply{minimumHeight=dp(80)})
                 separator(body)
-            }
-            if(!parkingEnabled)body.addView(label("주차정보 연결을 준비하고 있어요. 주차장을 지정하지 않고 코스를 만들 수 있어요.",13,muted))
-            open("2 · 주차 선택",body,"코스 비교하기",{
-                val point=origin
-                if(point==null){Toast.makeText(this,"출발지를 먼저 선택해 주세요.",Toast.LENGTH_SHORT).show();return@open}
-                if(loading||pending!=null){Toast.makeText(this,"이전 요청을 확인하고 있어요. 잠시 후 다시 눌러 주세요.",Toast.LENGTH_SHORT).show();return@open}
-                if(!connected){Toast.makeText(this,"모임 서버 연결을 확인해 주세요.",Toast.LENGTH_SHORT).show();return@open}
-                val choices=JSONObject()
-                selected.forEach{id->parking[id]?.let{choices.put(id,JSONObject().put("parkingId",it.getString("parkingId")).put("minutes",it.optInt("minutes",60)))} }
-                val shown=editor
-                shown?.getButton(AlertDialog.BUTTON_POSITIVE)?.apply{text="코스 비교 중…";isEnabled=false}
-                postRoom("plan",JSONObject().put("placeIds",org.json.JSONArray(selected.toList())).put("parkingSelections",choices).put("vehicle",currentParkingVehicle()).put("origin",point).put("startAt",java.time.Instant.now().toString()).put("assumedMinutes",20).put("remainingOnly",remaining),failed={shown?.getButton(AlertDialog.BUTTON_POSITIVE)?.apply{text="코스 비교하기";isEnabled=true}}){
-                    if(shown?.isShowing==true){shown.dismiss();showCourseComparison(it)}
+                val admission=admissions[id]
+                if(!busy&&admission?.optString("status")!="not_applicable")body.addView(choiceRow("${i+1}. ${p.getString("name")}",trailing=if(admission!=null&&!admission.isNull("total"))"관람 "+money(admission.getDouble("total"))+" ›" else "관람료 확인 ›",action={editAdmission(p)}).apply{contentDescription="코스 관람료 확인 ${p.getString("name")}"})
+                else body.addView(label("${i+1}. ${p.getString("name")}",20,ink).apply{setPadding(0,dp(8),0,dp(2))})
+                if(!busy){
+                    val row=LinearLayout(this).apply{gravity=Gravity.CENTER_VERTICAL;minimumHeight=dp(56);contentDescription="코스 주차 변경 ${p.getString("name")}";isClickable=true;isFocusable=true;setOnClickListener{
+                        if(canInteract()){
+                            editor?.dismiss();setupPage="conditions"
+                            showCourseParkingPicker(p,chosen?.takeIf{it.optString("mode")=="selected"},{choice->
+                                parking[id]=choice?.put("mode","selected")?.put("selectionSource","user") ?: JSONObject().put("mode","none").put("selectionSource","user")
+                                preparedKey="";prepareFailed=false;chooseParking()
+                            },{chooseParking()})
+                        }
+                    }}
+                    val copy=column()
+                    copy.addView(label(if(chosen?.optString("mode")=="selected")chosen.optString("name") else if(chosen?.optString("selectionSource")=="user")"주차 안 함" else "주차장 확인 필요",17,ink))
+                    copy.addView(label(if(chosen?.optString("mode")=="selected")(if(chosen.optString("selectionSource")=="nearest")"가장 가까운 곳 · " else "직접 선택 · ")+"직선 ${chosen.optInt("distanceMeters")}m · ${chosen.optInt("minutes",60)}분"+(if(chosen.optString("relation")!="facility"&&chosen.optString("kind")!="공영")" · 이용조건 확인" else "") else "다른 주차장을 직접 선택할 수 있어요.",12,muted))
+                    row.addView(copy,LinearLayout.LayoutParams(0,-2,1f))
+                    row.addView(if(chosen?.optString("mode")=="selected"&&!chosen.isNull("estimatedFee"))priceLabel(money(chosen.getDouble("estimatedFee")),23) else label(if(chosen?.optString("selectionSource")=="user")"변경 ›" else "요금 미확인 ›",14,muted),LinearLayout.LayoutParams(-2,-2).apply{leftMargin=dp(14)})
+                    body.addView(row)
                 }
-            },"이전",{choosePlaces()})
+            }
+            open("2/3 · 주차·비용",body,"다음",{
+                if(preparing||preparedKey!=key||prepareFailed)return@open
+                if(origin==null)pickOrigin{compareCourse()} else compareCourse()
+            },"이전",{setupPage="places";choosePlaces()})
+            editor?.getButton(AlertDialog.BUTTON_POSITIVE)?.isEnabled=!busy&&!prepareFailed
+            if(needsPrepare&&!preparing){
+                preparing=true;val generation=sessionGeneration;val payload=setupPayload().put("action","prepare")
+                io.execute{
+                    val response=runCatching{request("/api/rooms/$roomId/course",payload)}
+                    ui.post{
+                        preparing=false
+                        if(isDestroyed||generation!=sessionGeneration||setupPage!="parking"||editor?.isShowing!=true)return@post
+                        response.onSuccess{result->
+                            val rows=result.getJSONArray("places")
+                            for(n in 0 until rows.length()){
+                                val item=rows.getJSONObject(n);val id=item.getString("placeId");val choice=item.getJSONObject("parking")
+                                if(choice.optString("mode")=="selected")choice.put("parkingId",choice.getString("id"))
+                                parking[id]=choice;admissions[id]=item.getJSONObject("admission")
+                            }
+                            preparedKey=key;prepareFailed=false
+                        }.onFailure{prepareFailed=true;Toast.makeText(this,it.message ?: "정보를 확인하지 못했어요.",Toast.LENGTH_LONG).show()}
+                        chooseParking()
+                    }
+                }
+            }
         }
+
         choosePlaces()
     }
-    private fun courseColumn()=column().apply{setPadding(dp(22),dp(12),dp(22),dp(16))}
+    private fun courseColumn()=column().apply{setPadding(dp(20),dp(8),dp(20),dp(12))}
     private fun coursePopup()=CupertinoSheetBuilder(this,{canInteract()},centered=true,wide=true){sheets.removeAll{old->!old.isShowing};sheets.add(it)}
     private fun money(value:Double)=java.text.NumberFormat.getNumberInstance(java.util.Locale.KOREA).format(value)+"원"
+    private fun priceLabel(value:String,size:Int=25)=label(value,size,MoagilBrand.navy).apply{typeface=Typeface.create("sans-serif",Typeface.BOLD)}
     private fun parkingFeeLabel(p:JSONObject)=if(p.isNull("estimatedFee"))"요금 미제공" else money(p.optDouble("estimatedFee"))+" 예상"
     private fun parkingSummaryText(plan:JSONObject):String{
         val p=plan.optJSONObject("parkingSummary") ?: return "주차장 지정 없음"
         if(p.optInt("selectedCount")==0)return "주차장 지정 없음"
         val amount=money(p.optDouble("knownTotal"))
         return if(p.optInt("unknownCount")>0)"확인된 주차요금 $amount · ${p.optInt("unknownCount")}곳 요금 미제공" else "예상 주차요금 $amount"
+    }
+    private fun courseCostText(plan:JSONObject):String{
+        if(plan.optBoolean("needsReplan"))return "비용 다시 확인 필요"
+        val c=plan.optJSONObject("costSummary") ?: return parkingSummaryText(plan)
+        if(!c.optBoolean("complete")&&c.optDouble("knownTotal")==0.0)return "비용 확인 필요"
+        return (if(c.optString("scope")=="remaining")"남은 " else "")+(if(c.optBoolean("complete"))"예상 비용 " else "확인된 비용 ")+money(c.optDouble("knownTotal"))
+    }
+    private fun courseCostDetail(plan:JSONObject):String{
+        val c=plan.optJSONObject("costSummary") ?: return "주차요금 기준"
+        fun part(title:String,amount:String,unknown:String)=title+" "+(if(c.optInt(unknown)>0&&c.optDouble(amount)==0.0)"미확인" else (if(c.optInt(unknown)>0)"확인 " else "")+money(c.optDouble(amount)))
+        return part("주차","parkingKnown","unknownParking")+" · "+part("관람료","admissionKnown","unknownAdmission")
     }
     private fun courseTravelText(plan:JSONObject)=if(plan.optString("timingSource")=="kakao-road")"도로 ${plan.optDouble("roadDistanceKm")}km · 이동 약 ${plan.optInt("roadMinutes")}분" else "직선 ${plan.optDouble("straightKm")}km · 도로시간 확인 필요"
     private fun currentParkingVehicle()=JSONObject().put("type",prefs.getString("parkingVehicleType","standard")).put("diesel",prefs.getBoolean("parkingDiesel",false))
@@ -679,7 +791,7 @@ class FamilyTripActivity : Activity() {
                 val p=detail!!;primary.text="이 주차장 선택"
                 body.addView(label(p.getString("name"),24,ink))
                 body.addView(label("${minutes}분 · ${parkingVehicleLabel(vehicleType)}",15,muted))
-                body.addView(label(parkingFeeLabel(p),26,mint).apply{setPadding(0,dp(10),0,dp(12))})
+                body.addView(priceLabel(parkingFeeLabel(p),28).apply{setPadding(0,dp(10),0,dp(12))})
                 if(p.optString("discountStatus")=="estimated")note("기본 ${money(p.optDouble("baseEstimatedFee"))} → ${p.optInt("discountPercent")}% 감면 예상")
                 else if(vehicleType!="standard")note(if(p.optString("discountStatus")=="not_eligible")"선택한 차량 조건에는 이 감면이 적용되지 않아요." else "이 주차장의 할인 조건은 확인이 필요해요.")
                 note("장소까지 직선 ${p.optInt("distanceMeters")}m · ${p.optString("address")}")
@@ -727,7 +839,7 @@ class FamilyTripActivity : Activity() {
                             copy.addView(label("직선 ${p.optInt("distanceMeters")}m · "+when(p.optString("relation")){"facility"->"부설 확인";"facility_candidate"->"시설명 일치";else->"주변"},12,muted))
                             row.addView(copy,LinearLayout.LayoutParams(0,-2,1f))
                             val price=column().apply{gravity=Gravity.END}
-                            price.addView(label(if(p.isNull("estimatedFee"))"요금 미확인" else money(p.optDouble("estimatedFee")),18,if(p.isNull("estimatedFee"))muted else mint).apply{gravity=Gravity.END})
+                            price.addView((if(p.isNull("estimatedFee"))label("요금 미확인",16,muted) else priceLabel(money(p.optDouble("estimatedFee")),22)).apply{gravity=Gravity.END})
                             if(p.optString("discountStatus")=="estimated")price.addView(label("${p.optInt("discountPercent")}% 감면 예상",11,muted).apply{gravity=Gravity.END})
                             else if(vehicleType!="standard")price.addView(label(if(p.optString("discountStatus")=="not_eligible")"감면 제외" else "할인 확인 필요",11,muted).apply{gravity=Gravity.END})
                             row.addView(price,LinearLayout.LayoutParams(dp(130),-2).apply{leftMargin=dp(12)})
@@ -762,40 +874,80 @@ class FamilyTripActivity : Activity() {
         draw();query()
     }
 
-    private fun showCourseComparison(r:JSONObject){
+    private fun showCourseComparison(r:JSONObject,initialStrategy:String?=null,onStrategy:(String)->Unit={},onBack:(()->Unit)?=null){
         val plans=r.optJSONArray("plans") ?: return
         if(plans.length()==0)return
-        var selected=0
+        val wanted=initialStrategy ?: r.optJSONObject("course")?.optString("strategy") ?: "time"
+        var selected=(0 until plans.length()).firstOrNull{plans.getJSONObject(it).optString("strategy")==wanted} ?: 0
         val content=courseColumn()
         lateinit var popup:AlertDialog
         fun draw(){
             content.removeAllViews()
-            content.addView(label("3 · 코스 확인",17,mint))
-            val options=LinearLayout(this).apply{orientation=if(slimScreen)LinearLayout.VERTICAL else LinearLayout.HORIZONTAL};content.addView(options)
+            val options=LinearLayout(this)
             for(i in 0 until plans.length()){
-                val plan=plans.getJSONObject(i)
-                options.addView(choiceRow(plan.getString("title"),courseTravelText(plan)+"\n"+parkingSummaryText(plan),selected=i==selected,action={selected=i;draw()}).apply{background=surface(if(i==selected)soft else MoagilBrand.background,14);setPadding(dp(16),dp(10),dp(16),dp(10));minimumHeight=dp(94)},if(slimScreen)LinearLayout.LayoutParams(-1,-2).apply{bottomMargin=dp(8)}else LinearLayout.LayoutParams(0,-2,1f).apply{if(i>0)leftMargin=dp(8)})
+                val plan=plans.getJSONObject(i);val strategy=plan.optString("strategy")
+                val title=when(strategy){"time"->"시간 우선";"distance"->"거리 우선";"cost"->"비용 우선";else->plan.getString("title")}
+                val cost=plan.optJSONObject("costSummary")
+                val metric=when(strategy){
+                    "cost"->if(cost==null||!cost.optBoolean("complete")&&cost.optDouble("knownTotal")==0.0)"미확인" else (if(cost.optBoolean("complete"))"" else "확인 ")+money(cost.optDouble("knownTotal"))
+                    "distance"->if(plan.isNull("roadDistanceKm"))"직선 ${plan.optDouble("straightKm")}km" else "${plan.optDouble("roadDistanceKm")}km"
+                    else->if(plan.isNull("roadMinutes"))"시간 미확인" else "${plan.optInt("roadMinutes")}분"
+                }
+                val tile=column().apply{gravity=Gravity.CENTER;setPadding(dp(6),dp(8),dp(6),dp(8));background=surface(if(i==selected)soft else Color.TRANSPARENT,12);isClickable=true;isFocusable=true;contentDescription="코스 기준 $strategy";setOnClickListener{if(canInteract()){selected=i;onStrategy(strategy);draw()}}}
+                tile.addView(label((if(i==selected)"✓ " else "")+title,14,if(i==selected)mint else muted).apply{gravity=Gravity.CENTER;setPadding(0,0,0,0)})
+                tile.addView(priceLabel(metric,if(slimScreen)15 else 18).apply{gravity=Gravity.CENTER;setPadding(0,0,0,0);maxLines=2})
+                options.addView(tile,LinearLayout.LayoutParams(0,dp(60),1f).apply{if(i>0)leftMargin=dp(6)})
             }
+            content.addView(options)
             val plan=plans.getJSONObject(selected);val stops=plan.getJSONArray("stops")
-            plan.optJSONObject("vehicle")?.let{content.addView(label(parkingVehicleLabel(it.optString("type"))+(if(it.optBoolean("diesel"))" · 경유" else "")+" 기준 예상요금",13,muted))}
-            content.addView(label(plan.getString("reason"),14,muted).apply{setPadding(0,dp(12),0,dp(8))})
-            for(i in 0 until stops.length()){
-                val stop=stops.getJSONObject(i);content.addView(label("${i+1}. ${stop.getString("name")}",18,ink))
-                val parking=stop.optJSONObject("parking")
-                content.addView(label(if(parking?.optString("mode")=="selected")"주차 · ${parking.optString("name")} · ${parking.optInt("minutes")}분 ${parkingFeeLabel(parking)}" else "주차장 지정 안 함",13,muted))
+            content.addView(label(courseTravelText(plan),22,ink).apply{setPadding(0,dp(8),0,dp(4))})
+            content.addView(priceLabel(courseCostText(plan),26))
+            addCostBreakdown(content,plan.optJSONObject("costSummary"))
+            val summary=plan.optJSONObject("costSummary")
+            val changed=plan.optJSONObject("costComparison")?.optInt("changedCount") ?: 0
+            val delta=plan.optJSONObject("costDelta")
+            if(plan.optString("strategy")!="time"){
+                val amount=delta?.optDouble("amount") ?: 0.0
+                content.addView(label(if(delta?.optBoolean("comparable")==true){if(amount>0)"시간 우선보다 예상 ${money(amount)} 적어요" else if(amount<0)"시간 우선보다 예상 ${money(-amount)} 더 들어요" else "시간 우선과 예상 비용이 같아요"}else "미확인 요금이 있어 총비용의 우열은 알 수 없어요",13,if(delta?.optBoolean("comparable")==true&&amount>0)mint else muted))
             }
-            val notes=plan.optJSONArray("warnings");val detail=column().apply{visibility=View.GONE}
-            if(notes!=null)for(i in 0 until notes.length())detail.addView(label(notes.getString(i),12,muted))
-            if(plan.optString("sequenceSource")!="kakao-road-matrix")content.addView(label("도로 구간 전체를 비교하지 못해 직선 동선으로 순서를 정했어요.",12,MoagilBrand.warning))
-            content.addView(softButton("계산 기준 보기"){detail.visibility=if(detail.visibility==View.VISIBLE)View.GONE else View.VISIBLE})
+
+            val captions=mutableListOf("주차·관람료 기준","성인 ${plan.optInt("adultCount",1)}명")
+            if(changed>0)captions.add("주차장 ${changed}곳 변경")
+            if(summary!=null&&!summary.optBoolean("complete"))captions.add("일부 요금 미확인")
+            content.addView(label(captions.joinToString(" · "),12,muted).apply{setPadding(0,dp(4),0,dp(6))})
+            separator(content)
+            for(i in 0 until stops.length()){
+                val stop=stops.getJSONObject(i);val parking=stop.optJSONObject("parking")
+                content.addView(label("${i+1}. ${stop.getString("name")}",19,ink).apply{setPadding(0,dp(8),0,dp(2))})
+                if(parking?.optString("mode")=="selected")content.addView(label("주차 · ${parking.optString("name")}",13,muted))
+                content.addView(label(stopCostText(stop),13,muted))
+            }
+            val detail=column().apply{visibility=View.GONE}
+            detail.addView(label(plan.getString("reason"),14,muted))
+            val changes=plan.optJSONObject("costComparison")?.optJSONArray("changes")
+            if(changes!=null)for(i in 0 until changes.length()){
+                val change=changes.getJSONObject(i)
+                detail.addView(label("${change.optString("fromName")} → ${change.optString("toName")}\n"+(if(change.isNull("before"))"기존 요금 미확인" else money(change.optDouble("before")))+" → "+money(change.optDouble("after"))+" · 장소까지 직선 ${change.optInt("distanceMeters")}m",13,muted))
+            }
+
+            if(summary!=null&&!summary.optBoolean("complete"))detail.addView(label("미확인: 주차 ${summary.optInt("unknownParking")}곳 · 관람료 ${summary.optInt("unknownAdmission")}곳",13,MoagilBrand.warning))
+            detail.addView(label("차량 1대 기준 · 식비·유류비·통행료 제외",12,muted))
+            val notes=plan.optJSONArray("warnings");if(notes!=null)for(i in 0 until notes.length())detail.addView(label(notes.getString(i),12,muted))
+            for(i in 0 until stops.length()){
+                val stop=stops.getJSONObject(i);val a=stop.optJSONObject("admission") ?: continue
+                if(a.optString("status")!="not_applicable")detail.addView(label("${stop.getString("name")} 관람료 · "+if(a.isNull("total"))a.optString("raw").ifBlank{"미확인"} else money(a.getDouble("total"))+" · ${a.optString("provider")}",12,muted))
+            }
+            if(plan.optString("sequenceSource")!="kakao-road-matrix")content.addView(label("도로 구간 비교가 안 되어 직선 동선으로 순서를 정했어요.",12,MoagilBrand.warning))
+            content.addView(softButton("계산 기준·상세 요금"){detail.visibility=if(detail.visibility==View.VISIBLE)View.GONE else View.VISIBLE})
             content.addView(detail)
         }
-        popup=coursePopup().setTitle("어떤 코스로 갈까요?").setView(content).setNegativeButton("닫기",null).setPositiveButton("이 코스 저장",null).create();popup.show();draw()
+
+        popup=coursePopup().setTitle(if(onBack!=null)"3/3 · 코스 선택" else "코스 비교").setView(content).setNegativeButton(if(onBack!=null)"이전" else "닫기"){_,_->onBack?.invoke()}.setPositiveButton("이 코스 저장",null).create();popup.show();draw()
         popup.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{
             if(!canInteract())return@setOnClickListener
             val plan=plans.getJSONObject(selected)
             if(plan.optInt("violations")>0){Toast.makeText(this,"입력한 운영시간과 맞지 않아요. 장소의 방문 조건을 확인해 주세요.",Toast.LENGTH_LONG).show();return@setOnClickListener}
-            postRoom("course",JSONObject().put("action","choose").put("planId",plan.getString("id"))){popup.dismiss()}
+            postRoom("course",JSONObject().put("action","choose").put("planId",plan.getString("id"))){popup.dismiss();Toast.makeText(this,"코스를 저장했어요.",Toast.LENGTH_SHORT).show()}
         }
     }
 
@@ -807,34 +959,72 @@ class FamilyTripActivity : Activity() {
         return view
     }
     private fun timeLabel(iso:String)=runCatching{java.time.Instant.parse(iso).atZone(java.time.ZoneId.of("Asia/Seoul")).format(java.time.format.DateTimeFormatter.ofPattern("MM/dd HH:mm"))}.getOrDefault("확인 필요")
+    private fun addCostBreakdown(parent:LinearLayout,summary:JSONObject?){
+        if(summary==null)return
+        val row=LinearLayout(this)
+        listOf(Triple("주차비","parkingKnown","unknownParking"),Triple("관람료","admissionKnown","unknownAdmission")).forEachIndexed{i,(title,key,unknown)->
+            val missing=summary.optInt(unknown);val value=summary.optDouble(key)
+            val block=column().apply{setPadding(0,dp(8),dp(8),dp(8))}
+            block.addView(label(title+(if(missing>0)" · ${missing}곳 미확인" else ""),12,muted))
+            block.addView(priceLabel(if(missing>0&&value==0.0)"확인 필요" else (if(missing>0)"확인된 "+money(value) else money(value)),18))
+            row.addView(block,LinearLayout.LayoutParams(0,-2,1f))
+        }
+        parent.addView(row)
+    }
+    private fun stopCostText(stop:JSONObject):String{
+        val parking=stop.optJSONObject("parking");val admission=stop.optJSONObject("admission")
+        val park=if(parking?.optString("mode")=="selected")parkingFeeLabel(parking) else if(parking?.optString("selectionSource")=="user")"주차 안 함" else "주차비 확인 필요"
+        val ticket=if(admission==null||admission.isNull("total"))"관람료 확인 필요" else if(admission.optString("status")=="not_applicable")"식비·숙박비 별도" else "관람 "+money(admission.optDouble("total"))
+        return "$park · $ticket"
+    }
     private fun renderCoursePane(r:JSONObject){
         val course=r.optJSONObject("course")
         if(course!=null){
-            val stops=course.getJSONArray("stops");val index=course.optInt("nextIndex");val ongoing=index<stops.length()&&course.optString("status")!="cancelled"
-            val pane=featureCard(if(ongoing)"저장한 코스" else "지난 코스",courseTravelText(course)+" · "+parkingSummaryText(course))
+            val stops=course.getJSONArray("stops");val index=course.optInt("nextIndex");val ongoing=index<stops.length()&&course.optString("status")=="active"
+            val pane=featureCard(if(ongoing)"이어서 가요" else if(course.optString("status")=="complete")"코스를 모두 다녀왔어요" else "지난 코스","${course.optInt("visitedCount")}곳 방문 · ${course.optInt("skippedCount")}곳 건너뜀 · 전체 ${stops.length()}곳")
             if(ongoing){
-                val next=stops.getJSONObject(index)
-                pane.addView(label("다음 · ${next.getString("name")}",25,ink))
+                val next=stops.getJSONObject(index);val arrived=next.optString("status")=="arrived"
+                pane.addView(label(if(arrived)"방문 중 · ${index+1}/${stops.length()}" else "다음 장소 · ${index+1}/${stops.length()}",13,mint))
+                pane.addView(label(next.getString("name"),26,ink).apply{setPadding(0,dp(4),0,dp(4))})
                 val parking=next.optJSONObject("parking")
-                pane.addView(label(if(parking?.optString("mode")=="selected")"${parking.optString("name")}에 주차 · 장소까지 직선 ${parking.optInt("distanceMeters")}m" else "주차장 지정 안 함",14,muted))
+                if(parking?.optString("mode")=="selected")pane.addView(label("주차 · ${parking.optString("name")} · 장소까지 직선 ${parking.optInt("distanceMeters")}m",14,muted))
+                if(!arrived&&course.optString("timingSource")=="kakao-road")pane.addView(label("이 구간 약 ${next.optInt("legMinutes")}분 · 코스 계산 당시 기준",13,muted))
                 val replan=course.optBoolean("needsReplan")
                 if(replan)pane.addView(label("장소가 바뀌었어요. 남은 코스를 다시 확인해 주세요.",14,MoagilBrand.warning))
-                pane.addView(button(if(replan)"남은 코스 다시 만들기" else "코스로 출발"){if(replan)showPlanForm(true)else confirmCourseRoute(course)}.apply{isEnabled=pending==null&&(replan||naviReady||BuildConfig.TABLET_MODE)})
-            }else pane.addView(label("${stops.length()}곳의 방문 기록이 남아 있어요.",16,muted))
-            pane.addView(softButton("코스 보기 · 수정"){showCourseOverview(course)})
+                pane.addView(button(if(arrived)"방문 마치기" else if(replan)"남은 코스 다시 만들기" else "다음 장소로 출발"){
+                    if(arrived)confirmProgress(next,"visit") else if(replan)showPlanForm(true)else confirmCourseRoute(course)
+                }.apply{isEnabled=pending==null&&(arrived||replan||naviReady)})
+                val actions=LinearLayout(this)
+                if(!arrived)actions.addView(softButton("도착했어요"){confirmProgress(next,"arrive")},LinearLayout.LayoutParams(0,dp(52),1f))
+                actions.addView(softButton("건너뛰기"){confirmProgress(next,"skip")},LinearLayout.LayoutParams(0,dp(52),1f));pane.addView(actions)
+                if(index+1<stops.length())pane.addView(label("그다음 · ${stops.getJSONObject(index+1).getString("name")}",13,muted))
+                val remaining=course.optJSONObject("remainingCostSummary") ?: course.optJSONObject("costSummary")
+                separator(pane);pane.addView(label("앞으로 쓸 예상 비용",13,muted));addCostBreakdown(pane,remaining)
+                pane.addView(label("성인 ${course.optInt("adultCount",1)}명 · 차량 1대 · 식비·유류비·통행료 제외",11,muted))
+            }else{
+                pane.addView(label("방문한 곳의 예상 비용",13,muted));addCostBreakdown(pane,course.optJSONObject("visitedCostSummary"))
+                pane.addView(label("결제 내역이 아닌 선택한 요금 기준이에요.",12,muted))
+            }
+            pane.addView(softButton("코스 · 비용 자세히 보기"){showCourseOverview(course)})
+            if(index>0)pane.addView(softButton("마지막 방문 처리 되돌리기"){
+                postRoom("course",JSONObject().put("action","undo").put("courseId",course.getString("id")).put("expectedIndex",index))
+            })
             pane.addView(softButton("코스 삭제"){confirmDeleteCourse(course)}.apply{setTextColor(MoagilBrand.danger);contentDescription="저장한 코스 삭제"})
         }
-        val intro=featureCard(if(course==null)"어디를 들를까요?" else "새 코스 만들기",if(course==null)"장소를 고르고, 주차까지 한 번에 정해요." else "다른 장소와 주차장으로 코스를 비교해 보세요.")
-        intro.addView(button("코스 만들기"){showPlanForm()})
+        val intro=if(course==null)featureCard("가고 싶은 곳을 코스로","장소를 고르면 이동시간·거리·비용으로 비교해 드려요.")else featureCard("다른 코스 만들기")
+        intro.addView(if(course==null)button("코스 만들기"){showPlanForm()}else softButton("새 코스 만들기"){showPlanForm()})
         if((r.optJSONArray("plans")?.length() ?: 0)>0)intro.addView(softButton("비교한 코스 다시 보기"){showCourseComparison(r)})
     }
     private fun showCourseOverview(course:JSONObject){
         val content=courseColumn();val stops=course.getJSONArray("stops");val index=course.optInt("nextIndex")
-        content.addView(label(courseTravelText(course),19,ink));content.addView(label(parkingSummaryText(course),16,mint))
+        content.addView(label("전체 코스 예상 비용",14,muted));addCostBreakdown(content,course.optJSONObject("costSummary"))
+        content.addView(label("남은 장소 예상 비용",14,muted));addCostBreakdown(content,course.optJSONObject("remainingCostSummary"))
+        content.addView(label("성인 ${course.optInt("adultCount",1)}명 · 차량 1대 · 실제 결제 금액과 다를 수 있어요.",12,muted))
         lateinit var popup:AlertDialog
         for(i in 0 until stops.length()){
-            val stop=stops.getJSONObject(i);val state=when(stop.optString("status")){"visited"->"방문 완료";"skipped"->"건너뜀";else->if(i==index)"다음" else "예정"}
+            val stop=stops.getJSONObject(i);val state=when(stop.optString("status")){"visited"->"방문 완료";"skipped"->"건너뜀";"arrived"->"방문 중";else->if(i==index)"다음" else "예정"}
             content.addView(label("${i+1}. ${stop.getString("name")} · $state",19,ink).apply{setPadding(0,dp(16),0,dp(6))})
+            content.addView(label(stopCostText(stop),15,mint))
             val parking=stop.optJSONObject("parking")
             content.addView(label(if(parking?.optString("mode")=="selected")"주차 · ${parking.optString("name")}\n${parking.optInt("minutes")}분 ${parkingFeeLabel(parking)} · 장소까지 직선 ${parking.optInt("distanceMeters")}m\n자료: ${parking.optString("provider").ifBlank{"지방자치단체"}} · 기준일 ${parking.optString("referenceDate").ifBlank{"미제공"}}" else "주차장 지정 안 함",14,muted))
             separator(content)
@@ -846,7 +1036,7 @@ class FamilyTripActivity : Activity() {
             row.addView(softButton("방문 완료"){popup.dismiss();confirmProgress(stops.getJSONObject(index),"visit")},LinearLayout.LayoutParams(0,dp(60),1f))
             row.addView(softButton("건너뛰기"){popup.dismiss();confirmProgress(stops.getJSONObject(index),"skip")},LinearLayout.LayoutParams(0,dp(60),1f));content.addView(row)
         }
-        if(index>0)content.addView(softButton("이전 방문 처리 되돌리기"){postRoom("course",JSONObject().put("action","undo")){popup.dismiss()}})
+        if(index>0)content.addView(softButton("이전 방문 처리 되돌리기"){postRoom("course",JSONObject().put("action","undo").put("courseId",course.getString("id")).put("expectedIndex",index)){popup.dismiss()}})
         content.addView(softButton("코스 삭제"){confirmDeleteCourse(course){popup.dismiss()}}.apply{setTextColor(MoagilBrand.danger)})
         content.addView(label("주차요금은 선택한 시간·차량 조건으로 계산한 예상 금액이에요. 확인된 감면만 반영하며 현장 요금과 다를 수 있어요.\n자료: 공공데이터포털 · 카카오 로컬 API · 주차장 공식 안내",12,muted))
         popup=coursePopup().setTitle("코스 보기").setView(content).setNegativeButton("닫기",null).create();popup.show()
@@ -869,7 +1059,24 @@ class FamilyTripActivity : Activity() {
         }
     }
     private fun confirmProgress(stop:JSONObject,action:String){
-        coursePopup().setTitle(if(action=="visit")"이 장소 방문을 마쳤나요?" else "이 장소를 건너뛸까요?").setMessage(stop.getString("name")+"\n방문 기록만 변경하며, 다음 목적지 안내는 직접 선택합니다.").setNegativeButton("돌아가기",null).setPositiveButton("확인"){_,_->postRoom("course",JSONObject().put("action",action).put("placeId",stop.getString("placeId")))}.show()
+        val course=room?.optJSONObject("course") ?: return
+        val index=course.optInt("nextIndex");val current=course.optJSONArray("stops")?.optJSONObject(index)
+        if(current?.optString("placeId")!=stop.optString("placeId")){Toast.makeText(this,"방문 순서가 바뀌었어요. 현재 장소를 확인해 주세요.",Toast.LENGTH_SHORT).show();return}
+        val title=when(action){"arrive"->"이곳에 도착했나요?";"visit"->"방문을 마쳤나요?";else->"이 장소는 건너뛸까요?"}
+        val next=course.getJSONArray("stops").optJSONObject(index+1)
+        val message=stop.getString("name")+"\n"+if(action=="arrive")"방문 중으로 저장해 둘게요." else if(next!=null)"다음은 ${next.getString("name")}이에요." else "코스의 마지막 장소예요."
+        val confirm=coursePopup().setTitle(title).setMessage(message).setNegativeButton("취소",null).setPositiveButton(if(action=="arrive")"도착했어요" else if(action=="visit")"방문 완료" else "건너뛰기",null).create()
+        confirm.show();val commit=confirm.getButton(AlertDialog.BUTTON_POSITIVE);val original=commit.text
+        commit.setOnClickListener{
+            if(!canInteract())return@setOnClickListener
+            commit.isEnabled=false;commit.text="저장 중…"
+            postRoom("course",JSONObject().put("action",action).put("placeId",stop.getString("placeId")).put("courseId",course.getString("id")).put("expectedIndex",index),failed={commit.isEnabled=true;commit.text=original}){result->
+                confirm.dismiss();goToTab("course")
+                val updated=result.optJSONObject("course")
+                if(action!="arrive"&&updated?.optString("status")=="active")confirmCourseRoute(updated)
+                else Toast.makeText(this,if(action=="arrive")"도착한 장소를 저장했어요" else "코스를 모두 마쳤어요",Toast.LENGTH_SHORT).show()
+            }
+        }
     }
     private fun renderBallotPane(r:JSONObject){
         val b=r.optJSONObject("ballot")
@@ -1041,7 +1248,7 @@ class FamilyTripActivity : Activity() {
         if(!::status.isInitialized)return
                 status.text=if(connected){
             if(pending!=null||navigationStatus.contains("오류")||navigationStatus.contains("실패")||navigationStatus.contains("확인"))navigationStatus else "함께 갈 곳을 골라보세요"
-        }else if(slimScreen) "재연결 중 · 마지막 받은 장소" else "여행방 연결 대기 · 마지막 받은 장소 표시 · 서버를 확인해 주세요"
+        }else if(slimScreen) "재연결 중 · 마지막 받은 장소" else "연결을 확인하고 있어요 · 저장된 장소를 보여드려요"
         status.contentDescription=if(connected)"$navigationStatus. 여행방 연결됨. $lastSync 갱신" else "여행방 연결 대기. 마지막으로 받은 장소를 표시합니다."
         status.setTextColor(if(connected) mint else MoagilBrand.warning)
         status.visibility=if(!connected||pending!=null||navigationStatus.contains("오류")||navigationStatus.contains("실패")||navigationStatus.contains("확인"))View.VISIBLE else View.GONE
@@ -1051,7 +1258,7 @@ class FamilyTripActivity : Activity() {
         updateUndoBar()
         cards.removeAllViews()
         cards.gravity=Gravity.TOP
-        overviewRow?.visibility=if(activeTab=="places")View.GONE else View.VISIBLE
+        overviewRow?.visibility=if(activeTab in setOf("places","course","settings"))View.GONE else View.VISIBLE
         if(!safety.allowed){
             toolsRow.visibility=View.GONE
             cards.addView(label("주차 후 이용해 주세요",24,ink))
@@ -1221,7 +1428,7 @@ class FamilyTripActivity : Activity() {
             if(visit==null||System.currentTimeMillis()-checked>=86400000L)content.addView(softButton("운영정보 확인"){load("tourDetails")}.apply{gravity=Gravity.CENTER;background=surface(soft,12)})
             if(info==null)content.addView(softButton("전화번호 등 기본정보 확인"){load("details")}.apply{textSize=26f})
             if(info!=null)content.addView(label("장소 정보 제공: 카카오 로컬 API",11,muted))
-            if(parkingEnabled)content.addView(softButton("주변 주차장 보기"){detail.dismiss();showParking(current)})
+            if(parkingEnabled)content.addView(softButton("주변 주차장 보기"){detail.dismiss();showParking(current){showPlaceDetails(current)}})
             content.addView(softButton("데이터 출처와 이용안내"){showSources()})
             content.addView(softButton("차량 내비에서 장소 찾기"){
                 if(BuildConfig.TABLET_MODE){openTabletMap(current);return@softButton}
@@ -1247,7 +1454,7 @@ class FamilyTripActivity : Activity() {
         content.addView(softButton("원문·이용 조건 보기"){runCatching{startActivity(Intent(Intent.ACTION_VIEW,android.net.Uri.parse(baseUrl()+"/sources")))}.onFailure{Toast.makeText(this,"웹페이지에서 /sources를 열어 주세요",Toast.LENGTH_LONG).show()}})
         placePopup().setTitle("데이터 출처와 이용안내").setView(content).setNegativeButton("닫기",null).show()
     }
-    private fun showParking(place:JSONObject){
+    private fun showParking(place:JSONObject,onClose:()->Unit={}){
         lateinit var popup:AlertDialog
         val content=column().apply{setPadding(dp(22),dp(10),dp(22),dp(16))}
         var busy=false
@@ -1272,24 +1479,34 @@ class FamilyTripActivity : Activity() {
                             fun number(p:JSONObject,key:String,suffix:String)=if(p.isNull(key))"미제공" else "${p.get(key)}$suffix"
                             for(i in 0 until rows.length()){
                                 val p=rows.getJSONObject(i)
-                                content.addView(label("${p.getString("name")} · ${p.getInt("distanceMeters")}m",18,ink).apply{setPadding(0,dp(18),0,dp(6))})
-                                content.addView(label(p.optString("address"),14,muted))
-                                content.addView(label(if(p.optString("feeType")=="무료")"무료" else "${p.optString("feeType").ifBlank{"요금 구분 미제공"}} · 기본 ${number(p,"basicMinutes","분")} / ${number(p,"basicFee","원")}\n추가 ${number(p,"extraMinutes","분")} / ${number(p,"extraFee","원")}",15,ink))
-                                if(p.optString("operatingDays").isNotBlank())content.addView(label("운영일: ${p.optString("operatingDays")}",13,muted))
-                                listOf("평일" to "weekday","토요일" to "saturday","공휴일" to "holiday").forEach{(name,key)->if(p.optString(key).isNotBlank()&&p.optString(key)!="–")content.addView(label("$name ${p.optString(key)}",13,muted))}
-                                if(p.optString("notes").isNotBlank())content.addView(label(p.optString("notes"),13,muted))
-                                content.addView(label("제공: ${p.optString("provider").ifBlank{"지방자치단체"}}\n관리: ${p.optString("institution").ifBlank{"미제공"}}\n데이터 기준일: ${p.optString("referenceDate").ifBlank{"미제공"}}\n조회: ${data.optString("checkedAt").take(10)}",12,muted))
-                                content.addView(label("원문: ${p.optString("sourceUrl")}",12,muted))
+                                val details=column().apply{visibility=View.GONE;setPadding(dp(12),0,dp(12),dp(8))}
+                                lateinit var heading:Button
+                                heading=softButton("${p.getString("name")} · ${p.getInt("distanceMeters")}m  ＋"){
+                                    val expanded=details.visibility==View.VISIBLE
+                                    details.visibility=if(expanded)View.GONE else View.VISIBLE
+                                    heading.text="${p.getString("name")} · ${p.getInt("distanceMeters")}m  ${if(expanded)"＋" else "−"}"
+                                }.apply{gravity=Gravity.LEFT or Gravity.CENTER_VERTICAL;textSize=30f;setTextColor(ink)}
+                                content.addView(heading)
+                                val fee=if(p.optString("feeType")=="무료")"무료" else if(!p.isNull("basicFee")&&!p.isNull("basicMinutes"))"기본 ${p.get("basicMinutes")}분 · ${java.text.NumberFormat.getIntegerInstance().format(p.getDouble("basicFee"))}원" else "요금 확인 필요"
+                                content.addView(label(fee,17,mint).apply{typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL);setPadding(dp(12),0,0,dp(10))})
+                                details.addView(label(p.optString("address"),14,muted))
+                                details.addView(label(if(p.optString("feeType")=="무료")"무료" else "${p.optString("feeType").ifBlank{"요금 구분 미제공"}} · 기본 ${number(p,"basicMinutes","분")} / ${number(p,"basicFee","원")}\n추가 ${number(p,"extraMinutes","분")} / ${number(p,"extraFee","원")}",15,ink))
+                                if(p.optString("operatingDays").isNotBlank())details.addView(label("운영일: ${p.optString("operatingDays")}",13,muted))
+                                listOf("평일" to "weekday","토요일" to "saturday","공휴일" to "holiday").forEach{(name,key)->if(p.optString(key).isNotBlank()&&p.optString(key)!="–")details.addView(label("$name ${p.optString(key)}",13,muted))}
+                                if(p.optString("notes").isNotBlank())details.addView(label(p.optString("notes"),13,muted))
+                                details.addView(label("제공: ${p.optString("provider").ifBlank{"지방자치단체"}}\n관리: ${p.optString("institution").ifBlank{"미제공"}}\n데이터 기준일: ${p.optString("referenceDate").ifBlank{"미제공"}}\n조회: ${data.optString("checkedAt").take(10)}",12,muted))
+                                details.addView(label("원문: ${p.optString("sourceUrl")}",12,muted))
+                                content.addView(details)
                                 separator(content)
                             }
                         }
-                    }.onFailure{content.addView(label("주차정보를 확인하지 못했어요. 인증키·활용 승인·연결 상태를 확인해 주세요.",16,muted))}
+                    }.onFailure{content.addView(label("주차정보를 불러오지 못했어요. 잠시 후 다시 확인해 주세요.",16,muted))}
                     content.addView(label("자료: 공공데이터포털 · 카카오 로컬 API · 주차장 공식 안내",12,muted))
                     content.addView(softButton("다시 확인"){refresh()})
                 }
             }
         }
-        popup=placePopup().setTitle("${place.getString("name")} 주변 주차장").setView(content).setNegativeButton("닫기",null).create();popup.show();refresh()
+        popup=placePopup().setTitle("${place.getString("name")} 주변 주차장").setView(content).setNegativeButton("이전"){_,_->onClose()}.create();popup.show();refresh()
     }
     private fun confirmDeletePlace(p:JSONObject){
         if(loading||pending!=null){Toast.makeText(this,"연결 또는 안내 요청이 끝난 뒤 삭제해 주세요",Toast.LENGTH_LONG).show();return}
@@ -1376,23 +1593,22 @@ class FamilyTripActivity : Activity() {
         finishAcknowledgement()
     }
     private fun confirmCourseRoute(course:JSONObject){
-        val stops=course.getJSONArray("stops");val index=course.optInt("nextIndex")
-        if(BuildConfig.TABLET_MODE){
-            if(index>=stops.length())return
-            if(course.optBoolean("needsReplan")){showPlanForm(true);return}
-            val next=navigationPlace(stops.getJSONObject(index))
-            coursePopup().setTitle("다음 장소로 출발할까요?").setMessage("${next.getString("name")}\n태블릿에서는 한 곳씩 지도 앱에 연결해요. 방문 후 GMG에서 방문 완료를 눌러 주세요.")
-                .setNegativeButton("취소",null).setPositiveButton("지도 열기"){_,_->openTabletMap(next,true)}.show();return
-        }
-        val route=(index until minOf(index+3,stops.length())).map{navigationPlace(JSONObject(stops.getJSONObject(it).toString()).apply{put("id",getString("placeId"))})}
-        if(route.isEmpty())return
-        if(course.optBoolean("needsReplan")){Toast.makeText(this,"장소가 바뀌었어요. 남은 일정을 다시 계산해 주세요.",Toast.LENGTH_LONG).show();showPlanForm(true);return}
-        val content=column().apply{setPadding(dp(20),dp(10),dp(20),dp(10))}
-        content.addView(label("방문 순서대로 내비에 보낼까요?",20,ink))
-        route.forEachIndexed{i,p->content.addView(label("${i+1}. ${p.getString("name")}",18,ink))}
-        content.addView(label("기본 내비의 기존 목적지와 경유지를 변경해요. 최대 3곳씩 보내며 방문 완료는 앱에서 표시해 주세요.",14))
-        content.addView(label("카카오 계산과 플레오스 안내 경로·시간은 다를 수 있어요.",13))
-        dialog().setView(ScrollView(this).apply{addView(content)}).setNegativeButton("돌아가기",null).setPositiveButton("코스 보내기"){_,_->sendCourseRoute(route)}.show()
+        val stops=course.getJSONArray("stops");val index=course.optInt("nextIndex");val stop=stops.optJSONObject(index) ?: return
+        if(course.optBoolean("needsReplan")){showPlanForm(true);return}
+        val target=navigationPlace(JSONObject(stop.toString()).apply{put("id",getString("placeId"))})
+        val content=courseColumn()
+        content.addView(label(stop.getString("name"),25,ink))
+        if(target.getString("name")!=stop.getString("name"))content.addView(label("도착 지점 · ${target.getString("name")}",15,muted))
+        if(course.optString("timingSource")=="kakao-road")content.addView(label("이 구간 약 ${stop.optInt("legMinutes")}분 · 코스 계산 당시 기준",14,muted))
+        content.addView(label(stopCostText(stop),14,muted))
+        content.addView(label("이 장소만 차량 내비로 안내해요. 도착 후 다음 장소를 선택해 주세요.",13,muted))
+        if(!naviReady)content.addView(label("차량 내비 연결을 기다리고 있어요.",13,MoagilBrand.warning))
+        val popup=coursePopup().setTitle("다음 장소로 이동").setView(content).setNegativeButton("나중에",null).setPositiveButton("길 안내 시작",null).create();popup.show()
+        popup.getButton(AlertDialog.BUTTON_POSITIVE).apply{isEnabled=naviReady&&pending==null;setOnClickListener{
+            val latest=room?.optJSONObject("course")
+            if(latest?.optString("id")!=course.optString("id")||latest.optInt("nextIndex")!=index||latest.optBoolean("needsReplan")){popup.dismiss();Toast.makeText(this@FamilyTripActivity,"코스가 바뀌었어요. 현재 장소를 확인해 주세요.",Toast.LENGTH_SHORT).show();return@setOnClickListener}
+            popup.dismiss();sendRoute(target)
+        }}
     }
     private fun sendCourseRoute(route:List<JSONObject>){
         if(!canInteract())return
@@ -1484,7 +1700,10 @@ class FamilyTripActivity : Activity() {
         text=value;textSize=size*uiScale;setTextColor(color);includeFontPadding=false;gravity=Gravity.START or Gravity.CENTER_VERTICAL
         typeface=Typeface.create("sans-serif",Typeface.NORMAL);setLineSpacing(0f,1.14f);setPadding(0,dp(4),0,dp(4))
     }
-    private fun button(value:String,action:()->Unit)=Button(this).apply{
+    private fun button(value:String,action:()->Unit)=object:Button(this){
+        override fun setEnabled(enabled:Boolean){super.setEnabled(enabled);alpha=if(enabled)1f else .4f}
+        override fun setPressed(pressed:Boolean){super.setPressed(pressed);alpha=if(!isEnabled).4f else if(pressed).7f else 1f}
+    }.apply{
         text=value;textSize=if(slimScreen)18f else 20f;isAllCaps=false;includeFontPadding=false;gravity=Gravity.CENTER
         typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL);minHeight=dp(48);minimumHeight=dp(48);minWidth=0;minimumWidth=0
         setTextColor(MoagilBrand.onAccent);background=surface(mint,13);setPadding(dp(12),dp(8),dp(12),dp(8))
@@ -1501,7 +1720,13 @@ class FamilyTripActivity : Activity() {
     }
     override fun onResume(){super.onResume();if(isFinishing)return;active=true;safety.start();ui.removeCallbacks(tick);ui.post(tick);if(naviReady)runCatching{navi?.getCurrentLocationInfo()}}
     override fun onPause(){active=false;resultSheet?.dismiss();ui.removeCallbacks(tick);super.onPause()}
-    @Deprecated("Legacy back callback") override fun onBackPressed(){moveTaskToBack(true)}
+    override fun dispatchTouchEvent(event:android.view.MotionEvent):Boolean{
+        lastTouchAt=android.os.SystemClock.elapsedRealtime()
+        return super.dispatchTouchEvent(event)
+    }
+    @Deprecated("Legacy back callback") override fun onBackPressed(){
+        if(activeTab!="home")goToTab("home") else moveTaskToBack(true)
+    }
     override fun onDestroy(){dismissSheets();safety.stop();ui.removeCallbacksAndMessages(null);runCatching{navi?.removeListener(listener)};navi?.release();io.shutdownNow();super.onDestroy()}
 }
 
