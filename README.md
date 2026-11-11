@@ -4,6 +4,10 @@
 
 ## 소개와 시연 자료
 
+**[GMG 대표 홍보 영상 — 1분](docs/demo/GMG-launch-film.mp4)** · [영상 구성](docs/demo/LAUNCH-FILM.md)
+
+타이포·경로 애니메이션, 실제 앱 조작 화면, 직접 만든 배경음으로 프로젝트를 소개합니다.
+
 [프로젝트 소개 영상](docs/demo/GMG-overview.mp4) · [기능 시연 영상](docs/demo/GMG-walkthrough.mp4) · [실제 앱 화면](docs/demo/GMG-screens.png)
 
 자료별 설명과 촬영 범위는 [시연 자료 안내](docs/demo/README.md)에서 확인할 수 있습니다.
