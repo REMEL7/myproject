@@ -6,7 +6,7 @@
 
 **[GMG 대표 홍보 영상 — 1분](docs/demo/GMG-launch-film.mp4)** · [영상 구성](docs/demo/LAUNCH-FILM.md)
 
-타이포·경로 애니메이션, 실제 앱 조작 화면, 직접 만든 배경음으로 프로젝트를 소개합니다.
+밝은 제품 소개 화면, 실제 앱 조작 녹화, 직접 만든 배경음으로 구성한 광고형 프레젠테이션입니다.
 
 [프로젝트 소개 영상](docs/demo/GMG-overview.mp4) · [기능 시연 영상](docs/demo/GMG-walkthrough.mp4) · [실제 앱 화면](docs/demo/GMG-screens.png)
 
