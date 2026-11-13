@@ -17,7 +17,7 @@ const token = () => randomBytes(24).toString('base64url');
 const fail = (status, message) => { throw Object.assign(new Error(message), {status}); };
 const text = (value, max = 120) => typeof value === 'string' ? value.trim().slice(0, max) : '';
 
-export function createRelay({dataDir = path.join(here, 'data'), publicUrl = process.env.PUBLIC_URL || '', kakaoKey = process.env.KAKAO_REST_API_KEY || '', mapKey = process.env.KAKAO_JAVASCRIPT_KEY || '', mobilityKey = process.env.KAKAO_MOBILITY_REST_API_KEY || kakaoKey, tourKey=process.env.TOUR_API_KEY||'',fetchTour=fetch,parkingKey=process.env.PARKING_API_KEY||'',fetchParking=fetch,fetchPlaces = fetch, roadProvider = null, now = Date.now, roomLifetimeMs = 30*24*60*60*1000} = {}) {
+export function createRelay({dataDir = path.join(here, 'data'), publicUrl = process.env.PUBLIC_URL || '', kakaoKey = process.env.KAKAO_REST_API_KEY || '', mapKey = process.env.KAKAO_JAVASCRIPT_KEY || '', mobilityKey = process.env.KAKAO_MOBILITY_REST_API_KEY || kakaoKey, tourKey=process.env.TOUR_API_KEY||'',fetchTour=fetch,parkingKey=process.env.PARKING_API_KEY||'',fetchParking=fetch,fetchPlaces = fetch, roadProvider = null, now = Date.now, roomLifetimeMs = 30*24*60*60*1000, initialPlaces = []} = {}) {
   mkdirSync(dataDir, {recursive:true});
   const dbFile = path.join(dataDir, 'rooms.json');
   let rooms = {};
@@ -100,6 +100,7 @@ export function createRelay({dataDir = path.join(here, 'data'), publicUrl = proc
         const input = await body(req);
         if (Object.keys(rooms).length >= 200) fail(429, '개발 서버의 여행방 한도에 도달했습니다.');
         const r = {id:randomBytes(6).toString('hex'), name:text(input.name,40) || '우리의 모임', ownerToken:token(), joinToken:token(), places:[], selectedId:null, revision:0, expiresAt:now()+roomLifetimeMs, members:{}, plans:[], course:null, ballot:null, groupType:(['together','friends','family','colleagues'].includes(input.groupType)?input.groupType:'together')};
+        r.places=initialPlaces.map(place=>({...structuredClone(place),id:randomUUID(),createdAt:now(),voters:[]}));
         rooms[r.id] = r; save();
         return reply(res, 201, {...snapshot(r), ownerToken:r.ownerToken, joinToken:r.joinToken});
       }

@@ -1190,7 +1190,8 @@ class FamilyTripActivity : Activity() {
     private fun request(path: String, data: JSONObject? = null): JSONObject {
         val c = URL(baseUrl() + path).openConnection() as HttpURLConnection
         c.instanceFollowRedirects=false
-        require(BuildConfig.DEBUG || URI(baseUrl()).scheme=="https"){"보안 연결 주소가 필요합니다."}
+        val localSubmission = BuildConfig.SUBMISSION_BUILD && baseUrl()=="http://10.0.2.2:8787"
+        require(BuildConfig.DEBUG || localSubmission || URI(baseUrl()).scheme=="https"){"보안 연결 주소가 필요합니다."}
         c.connectTimeout = 5000; c.readTimeout = if(path.endsWith("/plan")||path.endsWith("/places"))35000 else 7000
         if (ownerToken.isNotBlank()) c.setRequestProperty("Authorization", "Bearer $ownerToken")
         try {

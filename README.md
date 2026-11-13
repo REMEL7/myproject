@@ -2,6 +2,12 @@
 
 휴대폰 지도에서 갈 장소를 모으고 차량에서 함께 정한 뒤, 내비게이션으로 안내받는 Pleos Connect 앱 개발 프로젝트입니다.
 
+## 공모전 심사용 APK
+
+**[서명된 release APK 다운로드](apk/GMG팀_GMG_release.apk)** · **[심사용 실행 안내](docs/SUBMISSION.md)**
+
+Pleos Connect 에뮬레이터 **v2.1.0**, 전체 화면 **2560×1440 px / 160 dpi**에서 검증합니다. 심사용 설치본은 기존 앱과 분리되며 PC에서 Node.js 공유 서버를 함께 실행해야 합니다. API 키 없이 기본 흐름을 확인하는 예시 서버와 실제 API 연결 방법을 실행 안내에 구분했습니다.
+
 ## 소개와 시연 자료
 
 **[GMG 대표 홍보 영상 — 1분](docs/demo/GMG-launch-film.mp4)** · [영상 구성](docs/demo/LAUNCH-FILM.md)
@@ -38,7 +44,7 @@
 2. 로컬 Android SDK 경로를 설정하고 Gradle 의존성을 받습니다.
 3. Pleos Connect 에뮬레이터에서 `app`을 실행합니다.
 
-명령줄에서는 JDK 17을 JAVA_HOME으로 설정한 뒤 `PleosStarter/gradlew.bat -p PleosStarter assembleDebug`로 빌드할 수 있습니다. 개발용 앱은 로컬 HTTP 서버에 연결하며, release 빌드는 HTTPS 서버 주소와 별도 서명 환경 변수가 필요합니다.
+명령줄에서는 JDK 17을 JAVA_HOME으로 설정한 뒤 `PleosStarter/gradlew.bat -p PleosStarter assembleProductionDebug`로 빌드할 수 있습니다. production release는 HTTPS 서버와 비공개 서명 설정이 필요합니다. 별도 submission release의 에뮬레이터 로컬 서버 연결 범위는 [심사용 안내](docs/SUBMISSION.md)에 설명했습니다.
 
 ## 현재 동작과 제한
 

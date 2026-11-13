@@ -9,6 +9,8 @@
 **/local.properties
 *.iml
 *.apk
+!/apk/
+!/apk/*.apk
 *.aab
 *.aar
 

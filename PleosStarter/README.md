@@ -8,7 +8,7 @@ Pleos Connect에서 실행하는 Kotlin Activity 앱입니다. 친구·가족·�
 - Gradle Wrapper 9.6.0, Android Gradle Plugin 9.4.1.
 - compileSdk 36, targetSdk 34, minSdk 28.
 - Vehicle 2.3.2, NaviHelper 3.0.5, ZXing 3.5.3.
-- Pleos Connect 에뮬레이터 v2.1.0에서 개발·검증.
+- Pleos Connect 에뮬레이터 v2.1.0에서 개발·검증. 전체 화면 2560×1440 px, 160 dpi.
 
 ## 실행
 
@@ -20,7 +20,7 @@ Pleos Connect에서 실행하는 Kotlin Activity 앱입니다. 친구·가족·�
 기본 실행 화면은 `FamilyTripActivity`입니다. 기본 서버 주소는 `http://10.0.2.2:8787`이고 고급 설정에서 바꿀 수 있습니다.
 
 ```powershell
-.\gradlew.bat assembleDebug
+.\gradlew.bat assembleProductionDebug
 ```
 
 상위 `.tools/java17`에 로컬 Java를 준비한 환경에서는 `build-debug.ps1`도 사용할 수 있습니다. 해당 개발 도구 폴더는 Git에 포함하지 않습니다.
@@ -50,6 +50,8 @@ Pleos Connect에서 실행하는 Kotlin Activity 앱입니다. 친구·가족·�
 글레오 스키마와 액션은 개발 단계입니다. 실제 음성 호출은 등록·승인과 지원 기기 검증이 필요합니다.
 
 ## Release
+
+공모전 심사용 `submissionRelease`는 [심사용 APK 실행 안내](../docs/SUBMISSION.md)를 따릅니다. 비공개 키로 서명하며 디버깅을 허용하지 않습니다. 패키지 `com.example.pleosstarter.submission`으로 기존 앱과 분리하고, `http://10.0.2.2:8787`만 PC 로컬 릴레이 예외로 허용합니다. 일반 `productionRelease`는 아래 HTTPS 검증을 유지합니다.
 
 `MOAGIL_SERVER_URL`에 HTTPS origin을 지정하고 다음 서명 환경 변수를 준비해야 합니다.
 

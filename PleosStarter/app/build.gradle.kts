@@ -10,7 +10,21 @@ android {
     useLibrary("android.car")
     buildFeatures { buildConfig = true }
     val productionUrl=providers.environmentVariable("MOAGIL_SERVER_URL").orNull ?: ""
-    defaultConfig { buildConfigField("String","DEFAULT_SERVER_URL","\"${productionUrl.replace("\\","\\\\").replace("\"","\\\"")}\"") }
+    defaultConfig {
+        buildConfigField("String","DEFAULT_SERVER_URL","\"${productionUrl.replace("\\","\\\\").replace("\"","\\\"")}\"")
+        buildConfigField("boolean","SUBMISSION_BUILD","false")
+    }
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("production") { dimension="distribution"; isDefault=true }
+        create("submission") {
+            dimension="distribution"
+            applicationIdSuffix=".submission"
+            versionNameSuffix="-submission"
+            buildConfigField("boolean","SUBMISSION_BUILD","true")
+            buildConfigField("String","DEFAULT_SERVER_URL","\"http://10.0.2.2:8787\"")
+        }
+    }
     signingConfigs {
         create("production") {
             providers.environmentVariable("MOAGIL_KEYSTORE").orNull?.let { storeFile=file(it) }
@@ -44,11 +58,14 @@ dependencies {
     implementation("com.google.zxing:core:3.5.3")
 }
 
-// Fail before packaging a release with development networking or missing signing credentials.
-tasks.matching { it.name=="preReleaseBuild" }.configureEach {
+// Both release variants require private signing. Only the isolated emulator submission
+// variant permits the PC relay; production continues to require an HTTPS origin.
+tasks.matching { it.name=="preProductionReleaseBuild" || it.name=="preSubmissionReleaseBuild" }.configureEach {
     doFirst {
-        val endpoint=System.getenv("MOAGIL_SERVER_URL") ?: ""
-        require(runCatching { URI(endpoint).let { it.scheme=="https" && !it.host.isNullOrBlank() && it.userInfo==null && it.query==null && it.fragment==null && it.path.isNullOrEmpty() } }.getOrDefault(false)) { "Release requires MOAGIL_SERVER_URL as an HTTPS origin." }
+        if(name=="preProductionReleaseBuild") {
+            val endpoint=System.getenv("MOAGIL_SERVER_URL") ?: ""
+            require(runCatching { URI(endpoint).let { it.scheme=="https" && !it.host.isNullOrBlank() && it.userInfo==null && it.query==null && it.fragment==null && it.path.isNullOrEmpty() } }.getOrDefault(false)) { "Production release requires MOAGIL_SERVER_URL as an HTTPS origin." }
+        }
         listOf("MOAGIL_KEYSTORE","MOAGIL_STORE_PASSWORD","MOAGIL_KEY_ALIAS","MOAGIL_KEY_PASSWORD").forEach { require(!System.getenv(it).isNullOrBlank()) { "Release signing environment is incomplete: $it" } }
     }
 }
